@@ -1,0 +1,67 @@
+configuration:
+  serial_port:
+    name: Serial port
+    description: USB-UART device, for example /dev/ttyUSB0. Use a 5 V TTL adapter.
+  baud:
+    name: Baud rate
+    description: Flow 5 uses 2400 baud, 8N1.
+  temperature_entities:
+    name: Temperature entities
+    description: Comma-separated Home Assistant entity ids that control the heater.
+  aggregation:
+    name: Temperature aggregation
+    description: min uses the coldest sensor, avg the average, max the warmest.
+  room_target:
+    name: Room target
+    description: Initial target temperature in °C.
+  room_drop:
+    name: Room drop
+    description: Heat demand starts this many degrees below the target.
+  room_rise:
+    name: Room rise
+    description: Heat demand ends this many degrees above the target.
+  min_on_minutes:
+    name: Minimum run
+    description: Minimum burner time after a room-temperature start.
+  min_off_minutes:
+    name: Minimum idle
+    description: Minimum idle time after a room-temperature stop.
+  sensor_stale_minutes:
+    name: Sensor timeout
+    description: Stop the burner if every control sensor is older than this.
+  coolant_limit:
+    name: Coolant limit
+    description: Stop combustion at this coolant temperature. Range 20–95 °C.
+  coolant_drop:
+    name: Coolant drop
+    description: Allow a new start only after the coolant falls by this amount.
+  shutdown_voltage:
+    name: Shutdown voltage
+    description: Stop the burner when the supply stays below this voltage.
+  shutdown_voltage_seconds:
+    name: Shutdown voltage time
+    description: How long the voltage must stay low before stopping.
+  fan_temperature:
+    name: Fan temperature
+    description: Publish the interior-fan request when coolant reaches this temperature.
+  pump_dose_ml:
+    name: Pump dose
+    description: Millilitres per pump stroke. 0.044 matches the 12 V TH-11 pump.
+  preheat_minutes:
+    name: Preheat duration
+    description: Initial preheat length in minutes.
+  extended_telemetry:
+    name: Extended telemetry
+    description: Request the 58-byte diagnostic frame used for pump frequency and voltage.
+  circulation_pump:
+    name: Circulation while waiting
+    description: Run the coolant pump while heat is still required and the burner is idle.
+  mqtt_host:
+    name: MQTT host
+    description: Leave empty to use the Mosquitto service from the Supervisor.
+  mqtt_port:
+    name: MQTT port
+  mqtt_username:
+    name: MQTT username
+  mqtt_password:
+    name: MQTT password
