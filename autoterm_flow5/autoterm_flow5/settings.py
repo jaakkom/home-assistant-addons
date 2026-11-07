@@ -30,6 +30,9 @@ class Settings:
     circulation_pump: bool = False
     aggregation: str = "min"
     temperature_entities: str = ""
+    simulate: bool = False
+    simulate_room_c: float = 15.0
+    simulate_fault: int = 0
 
     def sanitized(self) -> Settings:
         aggregation = self.aggregation if self.aggregation in {"min", "avg", "max"} else "min"
@@ -51,6 +54,9 @@ class Settings:
             circulation_pump=bool(self.circulation_pump),
             aggregation=aggregation,
             temperature_entities=self.temperature_entities.strip(),
+            simulate=bool(self.simulate),
+            simulate_room_c=_clamp(self.simulate_room_c, 0, 40),
+            simulate_fault=int(_clamp(self.simulate_fault, 0, 255)),
         )
 
     def entity_ids(self) -> list[str]:
@@ -101,4 +107,7 @@ def settings_from_options(options: dict) -> Settings:
         circulation_pump=bool(options.get("circulation_pump", False)),
         aggregation=str(options.get("aggregation", "min")),
         temperature_entities=str(options.get("temperature_entities", "") or ""),
+        simulate=bool(options.get("simulate", False)),
+        simulate_room_c=num("simulate_room_temperature", 15),
+        simulate_fault=int(num("simulate_fault_code", 0)),
     ).sanitized()

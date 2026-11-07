@@ -6,15 +6,17 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from .controller import Controller, aggregate
-from .faults import ChangeNotifier, LinkNotifier, fault_name
+from .faults import ChangeNotifier, LinkNotifier, Notice, fault_name
 from .fuel import FuelMeter, liters_per_hour
 from .ha import deliver_notice, read_temperature, supervisor_token
 from .link import SerialLink, open_port
 from .mqtt_bridge import PREFIX, apply_command, collect_state, discovery_messages, state_topic
 from .settings import Settings, settings_from_options
+from .simulator import SimulatedHeater
 
 LOG = logging.getLogger("autoterm_flow5")
 OPTIONS = Path(os.environ.get("OPTIONS_PATH", "/data/options.json"))
@@ -30,7 +32,7 @@ def load_options() -> dict:
     try:
         return json.loads(OPTIONS.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        LOG.warning("Asetustiedostoa ei voitu lukea")
+        LOG.warning("Could not read the options file")
         return {}
 
 
@@ -73,14 +75,17 @@ def run() -> None:
             client.connect(host, port, keepalive=60)
             break
         except Exception as exc:
-            LOG.warning("MQTT-yhteys epäonnistui (%s), uusi yritys", exc)
+            LOG.warning("MQTT connection failed (%s), retrying", exc)
             time.sleep(5)
     client.subscribe(f"{PREFIX}/set/#")
     client.loop_start()
     for topic, payload in discovery_messages():
         client.publish(topic, payload, retain=True)
     client.publish(f"{PREFIX}/availability", "online", retain=True)
-    LOG.info("MQTT yhdistetty %s:%s, sarjaportti %s @ %s", host, port, serial_path, baud)
+    if settings.simulate:
+        LOG.info("MQTT connected %s:%s, simulation enabled, UART is not used", host, port)
+    else:
+        LOG.info("MQTT connected %s:%s, serial port %s @ %s", host, port, serial_path, baud)
 
     link: SerialLink | None = None
     last_room: float | None = None
@@ -100,19 +105,19 @@ def run() -> None:
             age = None if last_room_at is None else now - last_room_at
             if link is None:
                 try:
-                    link = SerialLink(open_port(serial_path, baud), settings.extended_telemetry)
+                    link = open_link(settings, serial_path, baud)
                 except Exception as exc:  # serial port missing or busy
-                    LOG.warning("Sarjaporttia ei saatu auki: %s", exc)
+                    LOG.warning("Could not open the serial port: %s", exc)
                     _publish_offline(client, controller, fuel, settings, last_room)
                     time.sleep(POLL_S)
                     continue
             link.extended_telemetry = settings.extended_telemetry
             try:
-                output = controller.tick(now, link.status, link.extended, last_room, age)
-                link.poll(now, output.commands)
+                result = step(now, link, controller, settings, fuel, faults, link_notice, last_room, age)
             except Exception as exc:
-                LOG.warning("Sarjaliikenne epäonnistui: %s", exc)
-                link = None
+                LOG.warning("Heater communication failed: %s", exc)
+                if not settings.simulate:
+                    link = None
                 notice = link_notice.update(False)
                 if notice:
                     deliver_notice(notice, token, HA_API)
@@ -122,48 +127,90 @@ def run() -> None:
                     )
                 time.sleep(POLL_S)
                 continue
-            frequency = link.extended.pump_hz if link.extended else 0.0
-            fuel.dose_ml = settings.pump_dose_ml
-            if fuel.update(now, frequency, settings.pump_dose_ml):
-                fuel.save()
-            online = link.online(now)
-            code = _current_fault(link)
-            notice = faults.update(code)
-            if notice:
+            for notice in result.notices:
                 deliver_notice(notice, token, HA_API)
-                if notice.action == "create":
+                if notice.notification_id.endswith("_fault") and notice.action == "create":
                     client.publish(
                         f"{PREFIX}/event/fault",
-                        json.dumps({"code": notice.code, "message": notice.message or fault_name(code)}),
+                        json.dumps({"code": notice.code, "message": notice.message or fault_name(notice.code or 0)}),
                     )
-            link_event = link_notice.update(online)
-            if link_event:
-                deliver_notice(link_event, token, HA_API)
-                client.publish(
-                    f"{PREFIX}/event/link",
-                    json.dumps({"online": online, "message": link_event.message}),
-                )
-            values = collect_state(
-                link.status,
-                link.extended,
-                fuel=fuel,
-                settings=settings,
-                controller=controller,
-                room_c=last_room if age is not None and age <= settings.sensor_stale_s else None,
-                online=online,
-                telemetry_stale=link.telemetry_stale(now),
-                fan_on=output.fan_on,
-                frequency_hz=frequency,
-            )
-            for key, value in values.items():
+                if notice.notification_id.endswith("_link"):
+                    client.publish(
+                        f"{PREFIX}/event/link",
+                        json.dumps({"online": result.values.get("link") == "ON", "message": notice.message}),
+                    )
+            for key, value in result.values.items():
                 client.publish(state_topic(key), value, retain=True)
-            if frequency:
-                LOG.debug("kulutus %.3f l/h", liters_per_hour(frequency, settings.pump_dose_ml))
+            if result.frequency_hz:
+                LOG.debug(
+                    "consumption %.3f L/h",
+                    liters_per_hour(result.frequency_hz, settings.pump_dose_ml),
+                )
             time.sleep(max(0.0, POLL_S - (time.monotonic() - started)))
     finally:
         client.publish(f"{PREFIX}/availability", "offline", retain=True)
         client.loop_stop()
         client.disconnect()
+
+
+@dataclass
+class CycleResult:
+    values: dict[str, str]
+    notices: list[Notice]
+    frequency_hz: float
+
+
+def open_link(settings: Settings, serial_path: str, baud: int) -> SerialLink:
+    """Open the UART, or a simulated heater when simulation is enabled."""
+    if settings.simulate:
+        return SerialLink(SimulatedHeater(), settings.extended_telemetry)
+    return SerialLink(open_port(serial_path, baud), settings.extended_telemetry)
+
+
+def step(
+    now: float,
+    link: SerialLink,
+    controller: Controller,
+    settings: Settings,
+    fuel: FuelMeter,
+    faults: ChangeNotifier,
+    link_notice: LinkNotifier,
+    room_c: float | None,
+    room_age_s: float | None,
+) -> CycleResult:
+    """One control cycle against the previous status, then a fresh poll."""
+    port = link.port
+    if settings.simulate and isinstance(port, SimulatedHeater):
+        port.fault = int(settings.simulate_fault)
+    output = controller.tick(now, link.status, link.extended, room_c, room_age_s)
+    link.poll(now, output.commands)
+    frequency = link.extended.pump_hz if link.extended is not None else 0.0
+    if fuel.update(now, frequency, settings.pump_dose_ml) > 0:
+        fuel.save()
+    online = link.online(now)
+    notices: list[Notice] = []
+    fault_notice = faults.update(_current_fault(link))
+    if fault_notice is not None:
+        notices.append(fault_notice)
+    link_event = link_notice.update(online)
+    if link_event is not None:
+        notices.append(link_event)
+    coolant = link.status.coolant_c if link.status is not None else None
+    fan_on = coolant is not None and coolant >= settings.fan_temperature
+    fresh = room_c is not None and room_age_s is not None and room_age_s <= settings.sensor_stale_s
+    values = collect_state(
+        link.status,
+        link.extended,
+        fuel=fuel,
+        settings=settings,
+        controller=controller,
+        room_c=room_c if fresh else None,
+        online=online,
+        telemetry_stale=link.telemetry_stale(now),
+        fan_on=fan_on,
+        frequency_hz=frequency,
+    )
+    return CycleResult(values=values, notices=notices, frequency_hz=frequency)
 
 
 def _room(
@@ -173,6 +220,8 @@ def _room(
     last_room: float | None,
     last_room_at: float | None,
 ) -> tuple[float | None, float | None, float | None]:
+    if settings.simulate and not settings.entity_ids():
+        return settings.simulate_room_c, settings.simulate_room_c, now
     readings = [
         read_temperature(entity_id, token, HA_API)
         for entity_id in settings.entity_ids()

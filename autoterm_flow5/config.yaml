@@ -1,9 +1,9 @@
 name: Autoterm Flow 5
-version: "0.1.0"
+version: "0.2.0"
 slug: autoterm_flow5
 description: >-
-  Korvaa Autoterm Flow 5 -lämmittimen ohjauspaneelin. Ohjaa ja valvoo
-  lämmitintä USB-UART-sovittimen kautta ja julkaisee tilan Home Assistantiin.
+  Replaces the Autoterm Flow 5 control panel. Controls and monitors the
+  heater over a USB-UART adapter and publishes status to Home Assistant.
 url: https://github.com/jaakkom/home-assistant-addonss
 arch:
   - aarch64
@@ -39,6 +39,9 @@ options:
   preheat_minutes: 30
   extended_telemetry: true
   circulation_pump: false
+  simulate: false
+  simulate_room_temperature: 15
+  simulate_fault_code: 0
   mqtt_host: ""
   mqtt_port: 1883
   mqtt_username: ""
@@ -63,6 +66,9 @@ schema:
   preheat_minutes: int(1,480)
   extended_telemetry: bool
   circulation_pump: bool
+  simulate: bool
+  simulate_room_temperature: float(0,40)
+  simulate_fault_code: int(0,255)
   mqtt_host: str?
   mqtt_port: port?
   mqtt_username: str?

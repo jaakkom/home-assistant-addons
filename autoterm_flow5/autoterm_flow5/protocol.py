@@ -36,29 +36,29 @@ PUBR0 = bytes.fromhex("aa5055425230000000ffffffff0fb0")
 STATUS_LEN = 18
 EXTENDED_LEN = 58
 
-# state, substate -> Finnish name from the vendor mode table.
+# state, substate -> English name from the vendor mode table.
 STATE_NAMES: dict[tuple[int, int], str] = {
-    (0, 0): "Sammutettu",
-    (0, 1): "Odottaa komentoa",
-    (1, 0): "Odottaa lämpötilan laskua",
-    (1, 1): "Lukittu",
-    (2, 0): "Jäähdytys",
-    (2, 1): "Hehkutulppa lämpenee",
-    (2, 2): "Sytytyksen valmistelu",
-    (2, 3): "Sytytys 1",
-    (2, 4): "Sytytys 2",
-    (2, 5): "Puhallus",
-    (2, 6): "Palokammio lämpenee",
-    (2, 7): "Puhallus",
-    (3, 0): "Matala",
-    (3, 2): "Korkea",
-    (3, 4): "Puhallus",
-    (3, 5): "Odottaa",
-    (3, 6): "Puhallus",
-    (3, 7): "Vain pumppu",
-    (3, 8): "Keski",
-    (4, 0): "Jälkipuhallus",
-    (4, 3): "Sammutus",
+    (0, 0): "Off",
+    (0, 1): "Waiting for a command",
+    (1, 0): "Waiting for temperature reduction",
+    (1, 1): "Locked",
+    (2, 0): "Cooling",
+    (2, 1): "Glow plug warming up",
+    (2, 2): "Preparation for ignition",
+    (2, 3): "Ignition 1",
+    (2, 4): "Ignition 2",
+    (2, 5): "Blowing",
+    (2, 6): "Combustion chamber heating",
+    (2, 7): "Blowing",
+    (3, 0): "Low",
+    (3, 2): "High",
+    (3, 4): "Blowing",
+    (3, 5): "Waiting",
+    (3, 6): "Blowing",
+    (3, 7): "Pump only",
+    (3, 8): "Middle",
+    (4, 0): "Cooldown",
+    (4, 3): "Shutting down",
 }
 
 # 18-byte status indexes that have no confirmed meaning.
@@ -130,7 +130,7 @@ def cabin_temperature(celsius: int) -> bytes:
 
 
 def state_name(state: int, substate: int) -> str:
-    return STATE_NAMES.get((state, substate), f"Tila {state}.{substate}")
+    return STATE_NAMES.get((state, substate), f"State {state}.{substate}")
 
 
 @dataclass

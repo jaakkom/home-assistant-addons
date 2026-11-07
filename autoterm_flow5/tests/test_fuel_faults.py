@@ -39,18 +39,18 @@ class FuelTests(unittest.TestCase):
 
 class FaultTests(unittest.TestCase):
     def test_known_names(self):
-        self.assertEqual(fault_name(0), "Ei vikaa")
-        self.assertEqual(fault_name(1), "Ylikuumeneminen")
-        self.assertEqual(fault_name(25), "Liian nopea lämmönnousu")
-        self.assertEqual(fault_name(78), "Tarkista polttoainejärjestelmä")
-        self.assertEqual(fault_name(99), "Vikakoodi 99")
+        self.assertEqual(fault_name(0), "No fault")
+        self.assertEqual(fault_name(1), "Overheating")
+        self.assertEqual(fault_name(25), "Temperature rising too fast")
+        self.assertEqual(fault_name(78), "Check the fuel system")
+        self.assertEqual(fault_name(99), "Fault code 99")
 
     def test_notice_only_when_code_changes(self):
         notifier = ChangeNotifier("autoterm_flow5_fault", "Autoterm Flow 5")
         self.assertIsNone(notifier.update(0))
         first = notifier.update(14)
         self.assertEqual(first.action, "create")
-        self.assertIn("pumppu", first.message.lower())
+        self.assertIn("pump", first.message.lower())
         self.assertIsNone(notifier.update(14))
         changed = notifier.update(78)
         self.assertEqual(changed.action, "create")

@@ -1,5 +1,5 @@
 # Autoterm Flow 5
 
-Home Assistant -lisäosa, joka korvaa Autoterm Flow 5 -nesteenlämmittimen ohjauspaneelin yhdellä 5 V USB-UART-sovittimella.
+Home Assistant add-on that replaces the Autoterm Flow 5 coolant-heater control panel with one 5 V USB-UART adapter. Simulation can be turned on in the add-on options to exercise the Home Assistant entities without a heater or a serial port.
 
-Kytkentä, entiteetit, polttoainelasku ja vikakoodit ovat tiedostossa [DOCS.md](DOCS.md).
+Wiring, entities, fuel calculation, and fault codes are described in [DOCS.md](DOCS.md).

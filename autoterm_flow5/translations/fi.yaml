@@ -56,6 +56,15 @@ configuration:
   circulation_pump:
     name: Kierto odotuksessa
     description: Käytä kiertovesipumppua, kun lämpöä vielä tarvitaan ja poltin on sammuksissa.
+  simulate:
+    name: Simulointi
+    description: Aja ilman UART-laitetta. Sisäinen lämmitin vastaa samoihin kehyksiin, joten Home Assistantia voi testata ilman laitetta.
+  simulate_room_temperature:
+    name: Simuloitu huonelämpö
+    description: Huonelämpö, kun simulointi on päällä eikä Home Assistantin lämpötilaentiteettejä ole asetettu. Arvoa voi muuttaa myös Simulated room temperature -numerosta.
+  simulate_fault_code:
+    name: Simuloitu vikakoodi
+    description: Vikakoodi, jonka simuloitu lämmitin ilmoittaa. Nolla tarkoittaa ei vikaa. Asetusta ei käytetä, kun simulointi on pois päältä.
   mqtt_host:
     name: MQTT-osoite
     description: Jätä tyhjäksi, niin käytetään Supervisorin Mosquitto-palvelua.

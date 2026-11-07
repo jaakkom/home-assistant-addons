@@ -161,10 +161,11 @@ class Controller:
         if fresh and room_c is not None:
             commands.append(cabin_temperature(int(round(room_c))))
 
-        if self._stop_pending:
+        if self._stop_pending or (not self.heat_enabled and phase in ACTIVE):
             commands.append(stop_command())
             self._stop_pending = False
             self._run_started_at = None
+            self._start_at = None
         elif self.heat_enabled and not self.lockout:
             commands.extend(
                 self._mode_commands(now, phase, fresh, fault, coolant, voltage, room_age_s)

@@ -1,69 +1,79 @@
 # Autoterm Flow 5
 
-Lisäosa korvaa lämmittimen ohjauspaneelin. Yksi 5 V USB-UART-sovitin kytketään paneelin johtimen tilalle. Lisäosa on väylän ainoa osapuoli: se kysyy tilan, lähettää huonelämpötilan ja päättää käynnistyksen sekä pysäytyksen.
+The add-on replaces the heater control panel. One 5 V USB-UART adapter is wired in place of the panel cable. The add-on is the only device on that link: it polls status, reports the room temperature, and decides when to start and stop.
 
-Lämmitin on polttolaite. Ensimmäisellä kerralla valvo käynti: ensin pelkkä tila, sitten pysäytys, vasta sen jälkeen käynnistys.
+This controls a combustion heater. On the first run, watch it: confirm status first, then stop, and only then start.
 
-## Kytkentä
+## Wiring
 
-Flow 5 / BINAR-5S käyttää 2400 baud, 8N1, 5 V TTL -sarjaliikennettä. 3,3 V:n sovitin ei yleensä saa vastausta.
+Flow 5 / BINAR-5S uses 2400 baud, 8N1, 5 V TTL. A 3.3 V adapter usually gets no reply.
 
-| Sovitin | Lämmittimen johdin | Suunta |
+| Adapter | Heater wire | Direction |
 | --- | --- | --- |
-| TX | valkoinen | paneeli → lämmitin |
-| RX | keltainen | lämmitin → paneeli |
-| GND | sininen tai musta | yhteinen maa |
+| TX | white | panel to heater |
+| RX | yellow | heater to panel |
+| GND | blue or black | common ground |
 
-Punaista +12 V -johdinta ei kytketä sovittimeen. Se syöttää paneelia, eikä se ole sarjadataa.
+Do not connect the red +12 V wire. It powers the panel and is not serial data.
 
-Paneelia ei jätetä samaan liittimeen. Kaksi isäntää törmää, ja paneeli voi menettää yhteyden.
+Leave the physical panel disconnected. Two masters on the same connector collide, and the panel can lose communication.
 
-Mosquitto-lisäosa tarvitaan, jotta entiteetit ilmestyvät MQTT-discoveryn kautta. Lämpötilaentiteetit luetaan Home Assistantin rajapinnasta. Kirjoita ne asetukseen pilkulla erotettuna, esimerkiksi `sensor.olohuone,sensor.makuu`.
+The Mosquitto add-on is required so entities appear through MQTT discovery. Temperature entities are read from the Home Assistant API. Enter them as a comma-separated list, for example `sensor.living_room,sensor.bedroom`.
 
-## Ohjaus
+## Control
 
-Ilmastointientiteetti pitää huoneen tavoitetta. Lämmitys ei käynnisty lisäosan käynnistyessä. Käyttäjä kytkee lämmityksen päälle ilmastointientiteetistä, kytkimestä tai valitsee esilämmityksen tai pelkän pumpun.
+The climate entity holds the room target. Heating does not start when the add-on boots. Turn it on from the climate entity or the switch, or select preheat or pump-only mode.
 
-Huonelämpö luetaan Home Assistantin antureista. Oletuksena ohjaa kylmin lukema. Sama lukema lähetetään lämmittimelle paneelin ohjaamolämpönä. Asetusarvo ei kulje väylällä.
+Room temperature comes from Home Assistant sensors. The coldest reading is used by default. That same reading is sent to the heater as the panel cabin temperature. The setpoint itself is not sent on the wire.
 
-Lämmönpyyntö alkaa, kun lämpö on pudotuksen verran alle tavoitteen (oletus 2 °C), ja päättyy, kun se on nousun verran yli (oletus 1 °C). Vähimmäiskäynti ja vähimmäisseisonta ovat oletuksena 10 minuuttia, joten lyhyt lämpötilan pomppu ei sytytä poltinta heti uudelleen.
+Heat demand starts when the room is below the target by the drop (default 2 °C) and ends when it is above the target by the rise (default 1 °C). Minimum run and minimum idle are 10 minutes, so a one-degree bounce does not relight the burner immediately.
 
-Nesteen yläraja on oma numero, oletus 88 °C ja alue 20–95 °C. Pudotus, jonka jälkeen poltin saa syttyä uudelleen, on oletuksena 18 °C. Raja toteutetaan lisäosan pysäytyskäskyllä. Lämmittimen omaan muistiin ei kirjoiteta asetusta, koska sille ei ole vahvistettua kehystä. Jos lämmittimen oma raja on alempi, se ehtii pysäyttää ensin.
+The coolant limit is its own number, default 88 °C, range 20–95 °C. The drop required before another start is 18 °C by default. The limit is enforced by a stop command from the add-on. The heater's stored setpoint is not written, because no confirmed frame exists for that. If the heater's own limit is lower, the heater stops first.
 
-Ilman tuoretta anturilukemaa lämmitintä ei käynnistetä. Jos lukema vanhenee ajon aikana, poltin pysäytetään. Ylikuumeneminen (koodi 1) ja lukitus (koodi 37) eivät käynnisty uudelleen, ennen kuin lämmitys kytketään pois ja takaisin päälle.
+The burner is not started without a fresh sensor reading. If the reading goes stale during a run, the burner is stopped. Overheating (code 1) and lock (code 37) do not restart until heating is switched off and back on.
 
-Tehotasoa ei lähetetä. Matala, keski ja korkea ovat lämmittimen omia vaiheita, ja ne näkyvät antureina.
+There is no power-level command. Low, middle, and high are the heater's own stages and are published as sensors.
 
-Kaikki säädöt ovat Home Assistantin numeroita, kytkimiä tai valintoja. Muutos tallentuu tiedostoon `/data/settings.json` ja säilyy uudelleenkäynnistyksessä. Lisäosan asetussivu antaa vain ensimmäiset arvot. Jos haluat aloittaa asetussivulta uudelleen, poista tuo tiedosto.
+Every setting is a Home Assistant number, switch, or select. Changes are stored in `/data/settings.json` and survive a restart. The add-on option page supplies only the initial values. Delete that file to start again from the option page.
 
-## Polttoaine
+## Fuel
 
-Pumpun taajuus tulee laajennetusta 58 tavun kehyksestä. 12 V:n TH-11-pumppu (assy 4995) annostelee 0,044 ml iskua kohti. Hetkellinen kulutus on `l/h = taajuus_Hz × annos_ml × 3,6`. Kertymä integroidaan näytteiden välistä. Yli viiden sekunnin aukko ei kasvata kertymää. Kertymä on tiedostossa `/data/fuel.json`, ja sen voi nollata painikkeesta. 24 V -pumpun annos voi poiketa, joten annos on säädettävä.
+Pump frequency comes from the extended 58-byte frame. The 12 V TH-11 pump (assy 4995) meters 0.044 ml per stroke. Instantaneous consumption is `L/h = frequency_Hz * dose_ml * 3.6`. The total integrates the time between samples. A gap longer than five seconds adds nothing. The total is stored in `/data/fuel.json` and can be reset with a button. The 24 V pump dose can differ, so the dose is adjustable.
 
-Laajennettu telemetria pyydetään `PUBR0`-kättelyllä. Se on oletuksena päällä. Jos 58 tavun kehys ei tule, kättely lähetetään uudelleen noin minuutin välein.
+Extended telemetry is requested with the `PUBR0` handshake. It is on by default. If the 58-byte frame does not arrive, the handshake is sent again about once a minute.
 
-## Vikakoodit
+## Fault codes
 
-Vikakoodi, suomenkielinen teksti ja vikabinääri julkaistaan Home Assistantiin. Ilmoitus lähtee vain, kun koodi vaihtuu. Se poistuu, kun koodi palaa nollaan. MQTT-aihe `autoterm_flow5/event/fault` sisältää koodin ja tekstin, ja siitä voi tehdä puhelinilmoituksen automaatiolla. Sarjalinkin katkeaminen tekee oman ilmoituksen.
+The fault code, English text, and a fault binary sensor are published to Home Assistant. A notification is sent only when the code changes. It is removed when the code returns to zero. The MQTT topic `autoterm_flow5/event/fault` carries the code and text, so an automation can forward it to a phone. A lost serial link creates its own notification.
 
-| Koodi | Teksti |
+| Code | Text |
 | --- | --- |
-| 1 | Ylikuumeneminen |
-| 3, 24, 26 | Huolto |
-| 25 | Liian nopea lämmönnousu |
-| 12 | Ylijännite |
-| 14 | Jäähdytysnestepumppu tai -piiri |
-| 15 | Alijännite |
-| 17, 22 | Polttoainepumppu |
-| 20, 30, 50 | Ei yhteyttä |
-| 29, 78 | Tarkista polttoainejärjestelmä |
-| 37 | Lämmitin lukittu |
+| 1 | Overheating |
+| 3, 24, 26 | Service |
+| 25 | Temperature rising too fast |
+| 12 | Overvoltage |
+| 14 | Coolant pump or circuit |
+| 15 | Undervoltage |
+| 17, 22 | Fuel pump |
+| 20, 30, 50 | No connection |
+| 29, 78 | Check the fuel system |
+| 37 | Heater locked |
 
-Tuntematon koodi näytetään numerona.
+An unknown code is shown as its number.
 
-## Testit
+## Simulation
 
-Laitteistoa ei tarvita yksikkötesteihin:
+Turn on **Simulation** in the add-on options to run without a USB-UART adapter. The process does not open a serial port. An internal heater answers status requests, the `PUBR0` handshake, and start, stop, and pump commands with the same frames a Flow 5 uses.
+
+When no temperature entities are configured, the control temperature is **Simulated room temperature** (default 15 °C). Change it from that number entity to warm or cool the room. If temperature entities are set, those Home Assistant sensors are used instead, so the integration can be checked against real sensors while the heater stays simulated.
+
+**Simulated fault code** makes the virtual heater report that code. Use it to check the fault sensor and the notification. Set it back to 0 to clear the fault. The code is not sent to a real heater.
+
+Coolant climbs while the burner is on and falls after a stop, so the coolant limit and the following restart can be seen in Home Assistant. The **Simulation** binary sensor is on while this mode is active.
+
+## Tests
+
+No heater is required:
 
 ```bash
 PYTHONPATH=autoterm_flow5 python3 -m unittest discover -s autoterm_flow5/tests

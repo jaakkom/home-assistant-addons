@@ -56,6 +56,15 @@ configuration:
   circulation_pump:
     name: Circulation while waiting
     description: Run the coolant pump while heat is still required and the burner is idle.
+  simulate:
+    name: Simulation
+    description: Run without a UART device. A built-in heater answers the same frames, so Home Assistant can be tested without hardware.
+  simulate_room_temperature:
+    name: Simulated room temperature
+    description: Room temperature used while simulating and no Home Assistant temperature entities are set. It can also be changed from the Simulated room temperature number.
+  simulate_fault_code:
+    name: Simulated fault code
+    description: Fault code the simulated heater reports. Zero means no fault. It is ignored when simulation is off.
   mqtt_host:
     name: MQTT host
     description: Leave empty to use the Mosquitto service from the Supervisor.

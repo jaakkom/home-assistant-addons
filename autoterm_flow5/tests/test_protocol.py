@@ -54,7 +54,7 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(status.elapsed_seconds, 0x5C)
         self.assertTrue(status.burner_active)
         self.assertEqual(status.cooldown_counter, 0)
-        self.assertEqual(status.mode_name, "Sytytys 1")
+        self.assertEqual(status.mode_name, "Ignition 1")
 
     def test_extended_fields(self):
         raw = bytearray(58)
@@ -75,7 +75,7 @@ class StatusTests(unittest.TestCase):
         raw[52] = 1
         raw[54], raw[55] = 0, 100
         extended = decode_extended(bytes(raw))
-        self.assertEqual(extended.mode_name, "Korkea")
+        self.assertEqual(extended.mode_name, "High")
         self.assertEqual(extended.running_time_s, 300)
         self.assertEqual(extended.fan_target, 10)
         self.assertEqual(extended.fan_actual, 9)

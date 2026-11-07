@@ -6,22 +6,22 @@ from dataclasses import dataclass
 
 # Comfort Control manual, Flow 5 / Flow 14D v2 column.
 FAULT_NAMES: dict[int, str] = {
-    1: "Ylikuumeneminen",
-    3: "Huolto",
-    12: "Ylijännite",
-    14: "Jäähdytysnestepumppu tai -piiri",
-    15: "Alijännite",
-    17: "Polttoainepumppu",
-    20: "Ei yhteyttä",
-    22: "Polttoainepumppu",
-    24: "Huolto",
-    25: "Liian nopea lämmönnousu",
-    26: "Huolto",
-    29: "Tarkista polttoainejärjestelmä",
-    30: "Ei yhteyttä",
-    37: "Lämmitin lukittu",
-    50: "Ei yhteyttä",
-    78: "Tarkista polttoainejärjestelmä",
+    1: "Overheating",
+    3: "Service",
+    12: "Overvoltage",
+    14: "Coolant pump or circuit",
+    15: "Undervoltage",
+    17: "Fuel pump",
+    20: "No connection",
+    22: "Fuel pump",
+    24: "Service",
+    25: "Temperature rising too fast",
+    26: "Service",
+    29: "Check the fuel system",
+    30: "No connection",
+    37: "Heater locked",
+    50: "No connection",
+    78: "Check the fuel system",
 }
 
 LOCKOUT_CODES = frozenset({1, 37})
@@ -30,8 +30,8 @@ SELF_STOP_CODES = frozenset({25})
 
 def fault_name(code: int) -> str:
     if code == 0:
-        return "Ei vikaa"
-    return FAULT_NAMES.get(code, f"Vikakoodi {code}")
+        return "No fault"
+    return FAULT_NAMES.get(code, f"Fault code {code}")
 
 
 @dataclass
@@ -102,5 +102,5 @@ class LinkNotifier:
             action="create",
             notification_id="autoterm_flow5_link",
             title="Autoterm Flow 5",
-            message="Sarjayhteys lämmittimeen katkesi.",
+            message="Serial link to the heater was lost.",
         )

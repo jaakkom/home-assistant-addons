@@ -9,19 +9,19 @@ from autoterm_flow5.settings import Settings
 class MqttTests(unittest.TestCase):
     def test_discovery_covers_faults_fuel_and_limits(self):
         blob = "\n".join(payload for _topic, payload in discovery_messages())
-        self.assertIn("Vikateksti", blob)
-        self.assertIn("Vikakoodi", blob)
-        self.assertIn("Kulutus", blob)
-        self.assertIn("Nesteen yläraja", blob)
+        self.assertIn("Fault text", blob)
+        self.assertIn("Fault code", blob)
+        self.assertIn("Fuel consumption", blob)
+        self.assertIn("Coolant limit", blob)
         decoded = [json.loads(payload) for _topic, payload in discovery_messages()]
         names = {item.get("name") for item in decoded}
-        self.assertIn("Vikateksti", names)
-        self.assertIn("Kulutus", names)
-        self.assertIn("Nesteen yläraja", names)
-        self.assertIn("Polttoainekertymä", names)
+        self.assertIn("Fault text", names)
+        self.assertIn("Fuel consumption", names)
+        self.assertIn("Coolant limit", names)
+        self.assertIn("Fuel total", names)
         diagnostic = [item for item in decoded if item.get("entity_category") == "diagnostic"]
-        self.assertTrue(any(item.get("name", "").startswith("Tilatavu") for item in diagnostic))
-        self.assertTrue(any(item.get("name", "").startswith("Laajennettu tavu") for item in diagnostic))
+        self.assertTrue(any(item.get("name", "").startswith("Status byte") for item in diagnostic))
+        self.assertTrue(any(item.get("name", "").startswith("Extended byte") for item in diagnostic))
 
     def test_coolant_limit_command_is_clamped_and_kept(self):
         settings = Settings()

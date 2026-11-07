@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .controller import Controller
+from .controller import Controller, phase_of
 from .fuel import FuelMeter
 from .protocol import EXTENDED_LEN, EXTENDED_MAPPED, ExtendedFrame, StatusFrame
 from .settings import Settings
@@ -83,6 +83,7 @@ def _number(
     step: float,
     unit: str | None = None,
     mode: str = "box",
+    category: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "name": name,
@@ -98,72 +99,77 @@ def _number(
     }
     if unit:
         payload["unit_of_measurement"] = unit
+    if category:
+        payload["entity_category"] = category
     return {"component": "number", "key": key, "payload": payload}
 
 
 def discovery_messages() -> list[tuple[str, str]]:
     entities: list[dict[str, Any]] = [
-        _sensor("mode", "Toimintatila"),
-        _sensor("phase", "Ohjauksen vaihe", diagnostic=True),
-        _sensor("state_code", "Tilan koodi", diagnostic=True),
-        _sensor("substate_code", "Alitilan koodi", diagnostic=True),
-        _sensor("fault_code", "Vikakoodi"),
-        _sensor("fault_text", "Vikateksti"),
-        _binary("fault_active", "Vika", device_class="problem"),
-        _sensor("coolant", "Jäähdytysneste", unit="°C", device_class="temperature", state_class="measurement"),
-        _sensor("coolant_a", "Jäähdytysneste A", unit="°C", device_class="temperature", diagnostic=True),
-        _sensor("coolant_b", "Jäähdytysneste B", unit="°C", device_class="temperature", diagnostic=True),
-        _sensor("voltage_like", "Jännitemainen tavu", diagnostic=True),
-        _sensor("rising_sensor", "Nouseva anturi", unit="°C", diagnostic=True),
-        _sensor("elapsed_minutes", "Käyntiminuutit", unit="min", diagnostic=True),
-        _sensor("elapsed_seconds", "Käyntisekunnit", unit="s", diagnostic=True),
-        _binary("burner", "Poltin"),
-        _sensor("cooldown_counter", "Jäähtymislaskuri", diagnostic=True),
-        _sensor("status_hex", "Tilakehyksen heksa", diagnostic=True),
-        _sensor("ext_mode", "Laajennettu tila", diagnostic=True),
-        _sensor("runtime", "Käyntiaika", unit="s", state_class="measurement", diagnostic=True),
-        _sensor("fan_target", "Puhaltimen tavoite", diagnostic=True),
-        _sensor("fan_actual", "Puhaltimen mitattu", diagnostic=True),
-        _binary("glow_plug", "Hehkutulppa", diagnostic=True),
-        _sensor("pump_hz", "Pumpun taajuus", unit="Hz", state_class="measurement"),
-        _sensor("flame", "Liekin lämpö", unit="°C", device_class="temperature", state_class="measurement"),
-        _sensor("liquid", "Neste laajennetusta", unit="°C", device_class="temperature", diagnostic=True),
-        _sensor("overheat", "Ylikuumenemisanturi", unit="°C", device_class="temperature", state_class="measurement"),
-        _sensor("board", "Piirilevyn lämpö", unit="°C", device_class="temperature", diagnostic=True),
-        _sensor("voltage", "Jännite", unit="V", device_class="voltage", state_class="measurement"),
-        _sensor("ext_fault_code", "Laajennettu vikakoodi", diagnostic=True),
-        _sensor("engine_state", "Moottorin tila", diagnostic=True),
-        _sensor("relay_state", "Rele", diagnostic=True),
-        _sensor("fan_current", "Puhaltimen virta", unit="mA", diagnostic=True),
-        _sensor("ext_hex", "Laajennetun kehyksen heksa", diagnostic=True),
-        _sensor("fuel_lph", "Kulutus", unit="L/h", state_class="measurement", icon="mdi:fuel"),
-        _sensor("fuel_ml_min", "Kulutus minuutissa", unit="mL/min", state_class="measurement", diagnostic=True),
-        _sensor("fuel_total_l", "Polttoainekertymä", unit="L", state_class="total_increasing", icon="mdi:fuel"),
-        _sensor("fuel_total_ml", "Polttoainekertymä ml", unit="mL", state_class="total_increasing", diagnostic=True),
-        _sensor("room", "Ohjauslämpötila", unit="°C", device_class="temperature", state_class="measurement"),
-        _binary("demand", "Lämmönpyyntö"),
-        _binary("link", "Yhteys", device_class="connectivity"),
-        _binary("telemetry_stale", "Telemetria vanhentunut", device_class="problem", diagnostic=True),
-        _binary("fan_request", "Sisäpuhallin"),
-        _binary("lockout", "Lukitus", device_class="problem"),
-        _number("coolant_limit", "Nesteen yläraja", 20, 95, 1, "°C"),
-        _number("coolant_drop", "Nesteen pudotus", 1, 40, 1, "°C"),
-        _number("room_drop", "Huoneen pudotus", 0, 10, 0.5, "°C"),
-        _number("room_rise", "Huoneen nousu", 0, 10, 0.5, "°C"),
-        _number("min_on", "Vähimmäiskäynti", 0, 120, 1, "min"),
-        _number("min_off", "Vähimmäisseisonta", 0, 120, 1, "min"),
-        _number("sensor_stale", "Anturin vanheneminen", 1, 120, 1, "min"),
-        _number("shutdown_voltage", "Sammutusjännite", 9, 30, 0.1, "V"),
-        _number("shutdown_voltage_seconds", "Sammutusjännitteen aika", 1, 600, 1, "s"),
-        _number("fan_temperature", "Puhaltimen käynnistyslämpö", 30, 60, 1, "°C"),
-        _number("pump_dose", "Pumpun annos", 0.01, 0.2, 0.001, "mL"),
-        _number("preheat_minutes", "Esilämmityksen kesto", 1, 480, 1, "min"),
+        _sensor("mode", "Operating mode"),
+        _sensor("phase", "Control phase", diagnostic=True),
+        _sensor("state_code", "State code", diagnostic=True),
+        _sensor("substate_code", "Substate code", diagnostic=True),
+        _sensor("fault_code", "Fault code"),
+        _sensor("fault_text", "Fault text"),
+        _binary("fault_active", "Fault", device_class="problem"),
+        _sensor("coolant", "Coolant", unit="°C", device_class="temperature", state_class="measurement"),
+        _sensor("coolant_a", "Coolant A", unit="°C", device_class="temperature", diagnostic=True),
+        _sensor("coolant_b", "Coolant B", unit="°C", device_class="temperature", diagnostic=True),
+        _sensor("voltage_like", "Voltage-like byte", diagnostic=True),
+        _sensor("rising_sensor", "Rising sensor", unit="°C", diagnostic=True),
+        _sensor("elapsed_minutes", "Elapsed minutes", unit="min", diagnostic=True),
+        _sensor("elapsed_seconds", "Elapsed seconds", unit="s", diagnostic=True),
+        _binary("burner", "Burner"),
+        _sensor("cooldown_counter", "Cooldown counter", diagnostic=True),
+        _sensor("status_hex", "Status frame hex", diagnostic=True),
+        _sensor("ext_mode", "Extended mode", diagnostic=True),
+        _sensor("runtime", "Runtime", unit="s", state_class="measurement", diagnostic=True),
+        _sensor("fan_target", "Fan target", diagnostic=True),
+        _sensor("fan_actual", "Fan measured", diagnostic=True),
+        _binary("glow_plug", "Glow plug", diagnostic=True),
+        _sensor("pump_hz", "Pump frequency", unit="Hz", state_class="measurement"),
+        _sensor("flame", "Flame temperature", unit="°C", device_class="temperature", state_class="measurement"),
+        _sensor("liquid", "Extended liquid temperature", unit="°C", device_class="temperature", diagnostic=True),
+        _sensor("overheat", "Overheat sensor", unit="°C", device_class="temperature", state_class="measurement"),
+        _sensor("board", "Board temperature", unit="°C", device_class="temperature", diagnostic=True),
+        _sensor("voltage", "Voltage", unit="V", device_class="voltage", state_class="measurement"),
+        _sensor("ext_fault_code", "Extended fault code", diagnostic=True),
+        _sensor("engine_state", "Engine state", diagnostic=True),
+        _sensor("relay_state", "Relay", diagnostic=True),
+        _sensor("fan_current", "Fan current", unit="mA", diagnostic=True),
+        _sensor("ext_hex", "Extended frame hex", diagnostic=True),
+        _sensor("fuel_lph", "Fuel consumption", unit="L/h", state_class="measurement", icon="mdi:fuel"),
+        _sensor("fuel_ml_min", "Fuel consumption per minute", unit="mL/min", state_class="measurement", diagnostic=True),
+        _sensor("fuel_total_l", "Fuel total", unit="L", state_class="total_increasing", icon="mdi:fuel"),
+        _sensor("fuel_total_ml", "Fuel total ml", unit="mL", state_class="total_increasing", diagnostic=True),
+        _sensor("room", "Control temperature", unit="°C", device_class="temperature", state_class="measurement"),
+        _binary("demand", "Heat demand"),
+        _binary("link", "Link", device_class="connectivity"),
+        _binary("telemetry_stale", "Telemetry stale", device_class="problem", diagnostic=True),
+        _binary("fan_request", "Interior fan"),
+        _binary("lockout", "Lockout", device_class="problem"),
+        _number("coolant_limit", "Coolant limit", 20, 95, 1, "°C"),
+        _number("coolant_drop", "Coolant drop", 1, 40, 1, "°C"),
+        _number("room_drop", "Room drop", 0, 10, 0.5, "°C"),
+        _number("room_rise", "Room rise", 0, 10, 0.5, "°C"),
+        _number("min_on", "Minimum run", 0, 120, 1, "min"),
+        _number("min_off", "Minimum idle", 0, 120, 1, "min"),
+        _number("sensor_stale", "Sensor timeout", 1, 120, 1, "min"),
+        _number("shutdown_voltage", "Shutdown voltage", 9, 30, 0.1, "V"),
+        _number("shutdown_voltage_seconds", "Shutdown voltage time", 1, 600, 1, "s"),
+        _number("fan_temperature", "Fan start temperature", 30, 60, 1, "°C"),
+        _number("pump_dose", "Pump dose", 0.01, 0.2, 0.001, "mL"),
+        _number("preheat_minutes", "Preheat duration", 1, 480, 1, "min"),
+        _number("simulate_room", "Simulated room temperature", 0, 40, 0.5, "°C", category="config"),
+        _number("simulate_fault", "Simulated fault code", 0, 255, 1, category="config"),
+        _binary("simulation", "Simulation", diagnostic=True),
     ]
     for index in (5, 8, 10, 13, 14, 15, 17):
-        entities.append(_sensor(f"status_byte_{index}", f"Tilatavu {index}", diagnostic=True))
+        entities.append(_sensor(f"status_byte_{index}", f"Status byte {index}", diagnostic=True))
     for index in range(EXTENDED_LEN):
         if index not in EXTENDED_MAPPED:
-            entities.append(_sensor(f"ext_byte_{index}", f"Laajennettu tavu {index}", diagnostic=True))
+            entities.append(_sensor(f"ext_byte_{index}", f"Extended byte {index}", diagnostic=True))
 
     messages = []
     for entity in entities:
@@ -171,7 +177,7 @@ def discovery_messages() -> list[tuple[str, str]]:
         messages.append((topic, json.dumps(entity["payload"], ensure_ascii=False)))
 
     messages.append((f"homeassistant/switch/{PREFIX}/power/config", json.dumps({
-        "name": "Lämmitys",
+        "name": "Heating",
         "unique_id": f"{PREFIX}_power",
         "command_topic": set_topic("power"),
         "state_topic": state_topic("power"),
@@ -181,7 +187,7 @@ def discovery_messages() -> list[tuple[str, str]]:
         "device": DEVICE,
     })))
     messages.append((f"homeassistant/button/{PREFIX}/stop/config", json.dumps({
-        "name": "Pysäytys",
+        "name": "Stop",
         "unique_id": f"{PREFIX}_stop",
         "command_topic": set_topic("stop"),
         "availability_topic": f"{PREFIX}/availability",
@@ -189,7 +195,7 @@ def discovery_messages() -> list[tuple[str, str]]:
         "icon": "mdi:stop",
     })))
     messages.append((f"homeassistant/button/{PREFIX}/fuel_reset/config", json.dumps({
-        "name": "Nollaa polttoainekertymä",
+        "name": "Reset fuel total",
         "unique_id": f"{PREFIX}_fuel_reset",
         "command_topic": set_topic("fuel_reset"),
         "availability_topic": f"{PREFIX}/availability",
@@ -197,7 +203,7 @@ def discovery_messages() -> list[tuple[str, str]]:
         "entity_category": "config",
     })))
     messages.append((f"homeassistant/select/{PREFIX}/mode/config", json.dumps({
-        "name": "Tila",
+        "name": "Mode",
         "unique_id": f"{PREFIX}_mode",
         "command_topic": set_topic("mode"),
         "state_topic": state_topic("mode_select"),
@@ -206,7 +212,7 @@ def discovery_messages() -> list[tuple[str, str]]:
         "device": DEVICE,
     })))
     messages.append((f"homeassistant/select/{PREFIX}/aggregation/config", json.dumps({
-        "name": "Lämpötilan yhdistely",
+        "name": "Temperature aggregation",
         "unique_id": f"{PREFIX}_aggregation",
         "command_topic": set_topic("aggregation"),
         "state_topic": state_topic("aggregation"),
@@ -216,7 +222,7 @@ def discovery_messages() -> list[tuple[str, str]]:
         "entity_category": "config",
     })))
     messages.append((f"homeassistant/switch/{PREFIX}/circulation/config", json.dumps({
-        "name": "Kiertovesipumppu odotuksessa",
+        "name": "Circulation pump while waiting",
         "unique_id": f"{PREFIX}_circulation",
         "command_topic": set_topic("circulation"),
         "state_topic": state_topic("circulation"),
@@ -266,8 +272,8 @@ def collect_state(
     elif extended is not None:
         fault = extended.fault
     values: dict[str, Any] = {
-        "mode": status.mode_name if status else "Ei yhteyttä",
-        "phase": controller._phase,
+        "mode": status.mode_name if status else "No connection",
+        "phase": phase_of(status),
         "state_code": status.state if status else "",
         "substate_code": status.substate if status else "",
         "fault_code": fault,
@@ -327,6 +333,9 @@ def collect_state(
         "fan_temperature": settings.fan_temperature,
         "pump_dose": settings.pump_dose_ml,
         "preheat_minutes": settings.preheat_minutes,
+        "simulate_room": settings.simulate_room_c,
+        "simulate_fault": settings.simulate_fault,
+        "simulation": "ON" if settings.simulate else "OFF",
     }
     if status is not None:
         for index, value in status.unmapped.items():
@@ -397,6 +406,10 @@ def _apply_number(settings: Settings, key: str, text: str) -> None:
         settings.pump_dose_ml = float(text)
     elif key == "preheat_minutes":
         settings.preheat_minutes = int(float(text))
+    elif key == "simulate_room":
+        settings.simulate_room_c = float(text)
+    elif key == "simulate_fault":
+        settings.simulate_fault = int(float(text))
     else:
         raise ValueError(key)
 
