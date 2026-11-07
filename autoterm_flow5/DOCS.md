@@ -73,7 +73,7 @@ Coolant climbs while the burner is on and falls after a stop, so the coolant lim
 
 ## Tests
 
-No heater is required:
+No heater is required. The same command runs in GitHub Actions on pull requests and on pushes to `main`.
 
 ```bash
 PYTHONPATH=autoterm_flow5 python3 -m unittest discover -s autoterm_flow5/tests
