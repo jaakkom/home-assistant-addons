@@ -15,7 +15,7 @@ from .fuel import FuelMeter, liters_per_hour
 from .ha import deliver_notice, read_temperature, supervisor_token
 from .link import SerialLink, open_port
 from .mqtt_bridge import PREFIX, apply_command, collect_state, discovery_messages, state_topic
-from .settings import Settings, settings_from_options
+from .settings import Settings, option_value, settings_from_options
 from .simulator import SimulatedHeater
 
 LOG = logging.getLogger("autoterm_flow5")
@@ -37,10 +37,10 @@ def load_options() -> dict:
 
 
 def mqtt_config(options: dict) -> tuple[str, int, str, str]:
-    host = options.get("mqtt_host") or os.environ.get("MQTT_HOST") or "core-mosquitto"
-    port = int(options.get("mqtt_port") or os.environ.get("MQTT_PORT") or 1883)
-    username = options.get("mqtt_username") or os.environ.get("MQTT_USER") or os.environ.get("MQTT_USERNAME") or ""
-    password = options.get("mqtt_password") or os.environ.get("MQTT_PASSWORD") or ""
+    host = option_value(options, "mqtt", "mqtt_host", "") or os.environ.get("MQTT_HOST") or "core-mosquitto"
+    port = int(option_value(options, "mqtt", "mqtt_port", "") or os.environ.get("MQTT_PORT") or 1883)
+    username = option_value(options, "mqtt", "mqtt_username", "") or os.environ.get("MQTT_USER") or os.environ.get("MQTT_USERNAME") or ""
+    password = option_value(options, "mqtt", "mqtt_password", "") or os.environ.get("MQTT_PASSWORD") or ""
     return str(host), port, str(username), str(password)
 
 
@@ -55,8 +55,8 @@ def run() -> None:
     link_notice = LinkNotifier()
     token = supervisor_token()
     host, port, username, password = mqtt_config(options)
-    baud = int(options.get("baud", 2400))
-    serial_path = str(options.get("serial_port", "/dev/ttyUSB0"))
+    baud = int(option_value(options, "device", "baud", 2400) or 2400)
+    serial_path = str(option_value(options, "device", "serial_port", "/dev/ttyUSB0") or "/dev/ttyUSB0")
 
     import paho.mqtt.client as mqtt
 
