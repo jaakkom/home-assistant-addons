@@ -201,6 +201,21 @@ class SimulationLoopTests(unittest.TestCase):
         self.assertEqual(recovered.values["link"], "ON")
         self.assertTrue(any(notice.action == "dismiss" for notice in recovered.notices))
 
+    def test_shutdown_without_a_fault_restarts_the_burner(self):
+        self.settings.coolant_limit = 95
+        self.controller.settings = self.settings
+        self.cycle()
+        self.controller.set_heat(True, self.now)
+        self.cycle()
+        self.assertEqual(self.heater.events.count("start"), 1)
+        self.heater.burning = False
+        self.cycle()
+        restarted = self.cycle()
+        self.assertEqual(self.heater.events.count("start"), 2)
+        self.assertEqual(restarted.values["fault_code"], "0")
+        self.assertEqual(restarted.values["mode"], "High")
+        self.assertEqual(restarted.values["burner"], "ON")
+
     def test_discovery_advertises_the_simulation_entities(self):
         payloads = "\n".join(payload for _topic, payload in discovery_messages())
         self.assertIn("Simulated room temperature", payloads)

@@ -6,6 +6,7 @@ start, stop, pump, and the cabin-temperature report.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
 from .faults import LOCKOUT_CODES, SELF_STOP_CODES
@@ -20,6 +21,7 @@ from .protocol import (
 )
 from .settings import Settings
 
+LOG = logging.getLogger("autoterm_flow5.controller")
 MODES = ("thermostat", "preheat", "pump")
 ACTIVE = frozenset({"starting", "running"})
 
@@ -146,6 +148,8 @@ class Controller:
                 self._stopped_at = now
                 self._saw_fault_25 = False
                 self._run_started_at = None
+            elif fault == 0 and not self.lockout and self._stop_reason is None and self.heat_enabled:
+                self._note_unexpected_stop(now, coolant)
 
         if fresh and self.heat_enabled and self.mode == "thermostat" and not self.lockout:
             self.demand = update_demand(
@@ -293,6 +297,25 @@ class Controller:
             if coolant > self.settings.coolant_limit - self.settings.coolant_drop:
                 return False
         return True
+
+    def _note_unexpected_stop(self, now: float, coolant: float | None) -> None:
+        """The burner left an active phase with no fault and no stop from us.
+
+        Electromagnetic interference can do this without setting a fault code.
+        Start again while heat is still wanted. A coolant temperature that is
+        already at the limit waits for the normal drop instead of relighting.
+        """
+        self._run_started_at = None
+        self._start_at = None
+        self._stopped_at = now
+        if coolant is not None and coolant >= self.settings.coolant_limit:
+            self._stop_reason = "coolant"
+            LOG.info("Heater stopped at the coolant limit with no fault; waiting for the drop")
+            return
+        self._stop_reason = "unexpected"
+        self._preheat_sent = False
+        self._pump_sent = False
+        LOG.info("Heater stopped with no fault and no stop command; starting again")
 
     def _mark_stop(self, now: float, reason: str) -> None:
         self._stop_reason = reason

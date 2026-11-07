@@ -32,6 +32,8 @@ The coolant limit is its own number, default 88 °C, range 20–95 °C. The drop
 
 The burner is not started without a fresh sensor reading. If the reading goes stale during a run, the burner is stopped. Overheating (code 1) and lock (code 37) do not restart until heating is switched off and back on.
 
+If the heater returns to idle while heating is still on, and the status frame has no fault code, the add-on starts it again immediately. Electromagnetic interference can shut the burner down without a fault. That restart does not wait out the minimum idle time. A stop the add-on itself requested still follows the minimum idle time, the coolant drop, or the lockout. When the coolant is already at the limit, the add-on waits for the coolant drop before lighting again.
+
 There is no power-level command. Low, middle, and high are the heater's own stages and are published as sensors.
 
 Every setting is a Home Assistant number, switch, or select. Changes are stored in `/data/settings.json` and survive a restart. The add-on option page supplies only the initial values. Delete that file to start again from the option page.
