@@ -1,76 +1,104 @@
 configuration:
-  serial_port:
-    name: Sarjaportti
-    description: USB-UART-laite, esimerkiksi /dev/ttyUSB0. Sovittimen pitää olla 5 V TTL.
-  baud:
-    name: Siirtonopeus
-    description: Flow 5 käyttää 2400 baud, 8N1.
-  temperature_entities:
-    name: Lämpötilaentiteetit
-    description: Pilkulla erotetut Home Assistant -entiteetit, jotka ohjaavat lämmitintä.
-  aggregation:
-    name: Lämpötilan yhdistely
-    description: min käyttää kylmintä, avg keskiarvoa ja max kuuminta anturia.
-  room_target:
-    name: Huoneen tavoite
-    description: Ensimmäinen tavoitelämpötila, °C.
-  room_drop:
-    name: Huoneen pudotus
-    description: Lämmönpyyntö alkaa, kun lämpö on näin paljon alle tavoitteen.
-  room_rise:
-    name: Huoneen nousu
-    description: Lämmönpyyntö päättyy, kun lämpö on näin paljon yli tavoitteen.
-  min_on_minutes:
-    name: Vähimmäiskäynti
-    description: Lyhin polttoaika huonelämpötilasta tehdyn käynnistyksen jälkeen.
-  min_off_minutes:
-    name: Vähimmäisseisonta
-    description: Lyhin seisonta huonelämpötilasta tehdyn pysäytyksen jälkeen.
-  sensor_stale_minutes:
-    name: Anturin vanheneminen
-    description: Pysäytä poltin, jos kaikki ohjausanturit ovat tätä vanhempia.
-  coolant_limit:
-    name: Nesteen yläraja
-    description: Pysäytä poltto tässä nesteen lämpötilassa. Alue 20–95 °C.
-  coolant_drop:
-    name: Nesteen pudotus
-    description: Uusi käynnistys vasta, kun neste on laskenut näin monta astetta.
-  shutdown_voltage:
-    name: Sammutusjännite
-    description: Pysäytä poltin, jos syöttöjännite pysyy tämän alapuolella.
-  shutdown_voltage_seconds:
-    name: Sammutusjännitteen aika
-    description: Kuinka kauan jännitteen pitää olla alhaalla ennen pysäytystä.
-  fan_temperature:
-    name: Puhaltimen lämpö
-    description: Julkaise sisäpuhaltimen pyyntö, kun neste saavuttaa tämän lämpötilan.
-  pump_dose_ml:
-    name: Pumpun annos
-    description: Millilitraa iskua kohti. 0,044 vastaa 12 V:n TH-11-pumppua.
-  preheat_minutes:
-    name: Esilämmityksen kesto
-    description: Esilämmityksen ensimmäinen kesto minuutteina.
-  extended_telemetry:
-    name: Laajennettu telemetria
-    description: Pyydä 58 tavun diagnostiikkakehys, josta saadaan pumpun taajuus ja jännite.
-  circulation_pump:
-    name: Kierto odotuksessa
-    description: Käytä kiertovesipumppua, kun lämpöä vielä tarvitaan ja poltin on sammuksissa.
-  simulate:
+  simulation:
     name: Simulointi
-    description: Aja ilman UART-laitetta. Sisäinen lämmitin vastaa samoihin kehyksiin, joten Home Assistantia voi testata ilman laitetta.
-  simulate_room_temperature:
-    name: Simuloitu huonelämpö
-    description: Huonelämpö, kun simulointi on päällä eikä Home Assistantin lämpötilaentiteettejä ole asetettu. Arvoa voi muuttaa myös Simulated room temperature -numerosta.
-  simulate_fault_code:
-    name: Simuloitu vikakoodi
-    description: Vikakoodi, jonka simuloitu lämmitin ilmoittaa. Nolla tarkoittaa ei vikaa. Asetusta ei käytetä, kun simulointi on pois päältä.
-  mqtt_host:
-    name: MQTT-osoite
-    description: Jätä tyhjäksi, niin käytetään Supervisorin Mosquitto-palvelua.
-  mqtt_port:
-    name: MQTT-portti
-  mqtt_username:
-    name: MQTT-käyttäjä
-  mqtt_password:
-    name: MQTT-salasana
+    description: Käytä ilman lämmitintä. Pidä pois päältä, kun Flow 5 on kytketty.
+    fields:
+      simulate:
+        name: Simulointi
+        description: Aja ilman UART-laitetta. Sisäinen lämmitin vastaa samoihin kehyksiin, joten Home Assistantia voi testata ilman laitetta.
+      simulate_room_temperature:
+        name: Simuloitu huonelämpö
+        description: Huonelämpö, kun simulointi on päällä eikä Home Assistantin lämpötilaentiteettejä ole asetettu. Arvoa voi muuttaa myös Simulated room temperature -numerosta.
+      simulate_fault_code:
+        name: Simuloitu vikakoodi
+        description: Vikakoodi, jonka simuloitu lämmitin ilmoittaa. Nolla tarkoittaa ei vikaa. Asetusta ei käytetä, kun simulointi on pois päältä.
+  device:
+    name: Laiteliitäntä
+    description: USB-UART-linkki, joka korvaa ohjauspaneelin.
+    fields:
+      serial_port:
+        name: Sarjaportti
+        description: USB-UART-laite, esimerkiksi /dev/ttyUSB0. Sovittimen pitää olla 5 V TTL.
+      baud:
+        name: Siirtonopeus
+        description: Flow 5 käyttää 2400 baud, 8N1.
+      extended_telemetry:
+        name: Laajennettu telemetria
+        description: Pyydä 58 tavun diagnostiikkakehys, josta saadaan pumpun taajuus ja jännite.
+  temperature:
+    name: Lämpötilan ohjaus
+    description: Home Assistantin anturit ja termostaatin alkuarvot.
+    fields:
+      temperature_entities:
+        name: Lämpötilaentiteetit
+        description: Pilkulla erotetut Home Assistant -entiteetit, jotka ohjaavat lämmitintä.
+      aggregation:
+        name: Lämpötilan yhdistely
+        description: min käyttää kylmintä, avg keskiarvoa ja max kuuminta anturia.
+      room_target:
+        name: Huoneen tavoite
+        description: Ensimmäinen tavoitelämpötila, °C.
+      room_drop:
+        name: Huoneen pudotus
+        description: Lämmönpyyntö alkaa, kun lämpö on näin paljon alle tavoitteen.
+      room_rise:
+        name: Huoneen nousu
+        description: Lämmönpyyntö päättyy, kun lämpö on näin paljon yli tavoitteen.
+  timing:
+    name: Käyntiajat
+    description: Kuinka kauan poltin käy tai seisoo, ja esilämmityksen kesto.
+    fields:
+      min_on_minutes:
+        name: Vähimmäiskäynti
+        description: Lyhin polttoaika huonelämpötilasta tehdyn käynnistyksen jälkeen.
+      min_off_minutes:
+        name: Vähimmäisseisonta
+        description: Lyhin seisonta huonelämpötilasta tehdyn pysäytyksen jälkeen.
+      sensor_stale_minutes:
+        name: Anturin vanheneminen
+        description: Pysäytä poltin, jos kaikki ohjausanturit ovat tätä vanhempia.
+      preheat_minutes:
+        name: Esilämmityksen kesto
+        description: Esilämmityksen ensimmäinen kesto minuutteina.
+      circulation_pump:
+        name: Kierto odotuksessa
+        description: Käytä kiertovesipumppua, kun lämpöä vielä tarvitaan ja poltin on sammuksissa.
+  protection:
+    name: Neste ja jännite
+    description: Rajat, jotka pysäyttävät polton myös vähimmäiskäynnin aikana.
+    fields:
+      coolant_limit:
+        name: Nesteen yläraja
+        description: Pysäytä poltto tässä nesteen lämpötilassa. Alue 20–95 °C.
+      coolant_drop:
+        name: Nesteen pudotus
+        description: Uusi käynnistys vasta, kun neste on laskenut näin monta astetta.
+      shutdown_voltage:
+        name: Sammutusjännite
+        description: Pysäytä poltin, jos syöttöjännite pysyy tämän alapuolella.
+      shutdown_voltage_seconds:
+        name: Sammutusjännitteen aika
+        description: Kuinka kauan jännitteen pitää olla alhaalla ennen pysäytystä.
+      fan_temperature:
+        name: Puhaltimen lämpö
+        description: Julkaise sisäpuhaltimen pyyntö, kun neste saavuttaa tämän lämpötilan.
+  fuel:
+    name: Polttoaine
+    description: Pumpun annos, jolla kulutus lasketaan.
+    fields:
+      pump_dose_ml:
+        name: Pumpun annos
+        description: Millilitraa iskua kohti. 0,044 vastaa 12 V:n TH-11-pumppua.
+  mqtt:
+    name: MQTT
+    description: Jätä tyhjäksi, niin käytetään Supervisorin Mosquitto-brokeria.
+    fields:
+      mqtt_host:
+        name: MQTT-osoite
+        description: Jätä tyhjäksi, niin käytetään Supervisorin Mosquitto-palvelua.
+      mqtt_port:
+        name: MQTT-portti
+      mqtt_username:
+        name: MQTT-käyttäjä
+      mqtt_password:
+        name: MQTT-salasana

@@ -82,32 +82,52 @@ class Settings:
         return cls(**data).sanitized()
 
 
+def option_value(options: dict, section: str, name: str, default=None):
+    """Read one option from a grouped page, or from an older flat file."""
+    group = options.get(section)
+    if isinstance(group, dict) and name in group and group[name] is not None:
+        return group[name]
+    if name in options and options[name] is not None and not isinstance(options[name], (dict, list)):
+        return options[name]
+    return default
+
+
 def settings_from_options(options: dict) -> Settings:
-    def num(name: str, default: float) -> float:
+    def num(section: str, name: str, default: float) -> float:
         try:
-            return float(options.get(name, default))
+            return float(option_value(options, section, name, default))
         except (TypeError, ValueError):
             return default
 
+    def flag(section: str, name: str, default: bool) -> bool:
+        value = option_value(options, section, name, default)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def text(section: str, name: str, default: str = "") -> str:
+        value = option_value(options, section, name, default)
+        return default if value is None else str(value)
+
     return Settings(
-        room_target=num("room_target", 20),
-        room_drop=num("room_drop", 2),
-        room_rise=num("room_rise", 1),
-        min_on_s=num("min_on_minutes", 10) * 60,
-        min_off_s=num("min_off_minutes", 10) * 60,
-        sensor_stale_s=num("sensor_stale_minutes", 15) * 60,
-        coolant_limit=num("coolant_limit", 88),
-        coolant_drop=num("coolant_drop", 18),
-        shutdown_voltage=num("shutdown_voltage", 11.5),
-        shutdown_voltage_s=num("shutdown_voltage_seconds", 30),
-        fan_temperature=num("fan_temperature", 40),
-        pump_dose_ml=num("pump_dose_ml", 0.044),
-        preheat_minutes=int(num("preheat_minutes", 30)),
-        extended_telemetry=bool(options.get("extended_telemetry", True)),
-        circulation_pump=bool(options.get("circulation_pump", False)),
-        aggregation=str(options.get("aggregation", "min")),
-        temperature_entities=str(options.get("temperature_entities", "") or ""),
-        simulate=bool(options.get("simulate", False)),
-        simulate_room_c=num("simulate_room_temperature", 15),
-        simulate_fault=int(num("simulate_fault_code", 0)),
+        room_target=num("temperature", "room_target", 20),
+        room_drop=num("temperature", "room_drop", 2),
+        room_rise=num("temperature", "room_rise", 1),
+        min_on_s=num("timing", "min_on_minutes", 10) * 60,
+        min_off_s=num("timing", "min_off_minutes", 10) * 60,
+        sensor_stale_s=num("timing", "sensor_stale_minutes", 15) * 60,
+        coolant_limit=num("protection", "coolant_limit", 88),
+        coolant_drop=num("protection", "coolant_drop", 18),
+        shutdown_voltage=num("protection", "shutdown_voltage", 11.5),
+        shutdown_voltage_s=num("protection", "shutdown_voltage_seconds", 30),
+        fan_temperature=num("protection", "fan_temperature", 40),
+        pump_dose_ml=num("fuel", "pump_dose_ml", 0.044),
+        preheat_minutes=int(num("timing", "preheat_minutes", 30)),
+        extended_telemetry=flag("device", "extended_telemetry", True),
+        circulation_pump=flag("timing", "circulation_pump", False),
+        aggregation=text("temperature", "aggregation", "min"),
+        temperature_entities=text("temperature", "temperature_entities"),
+        simulate=flag("simulation", "simulate", False),
+        simulate_room_c=num("simulation", "simulate_room_temperature", 15),
+        simulate_fault=int(num("simulation", "simulate_fault_code", 0)),
     ).sanitized()

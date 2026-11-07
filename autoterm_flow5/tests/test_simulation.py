@@ -36,6 +36,21 @@ class OpenLinkTests(unittest.TestCase):
         self.assertEqual(settings.simulate_room_c, 18)
         self.assertEqual(settings.simulate_fault, 14)
 
+    def test_grouped_options_override_the_flat_file(self):
+        settings = settings_from_options(
+            {
+                "simulate": False,
+                "simulation": {"simulate": True, "simulate_room_temperature": 11, "simulate_fault_code": 0},
+                "temperature": {"room_target": 19, "aggregation": "avg"},
+                "protection": {"coolant_limit": 80},
+            }
+        )
+        self.assertTrue(settings.simulate)
+        self.assertEqual(settings.simulate_room_c, 11)
+        self.assertEqual(settings.room_target, 19)
+        self.assertEqual(settings.aggregation, "avg")
+        self.assertEqual(settings.coolant_limit, 80)
+
     def test_simulated_room_is_used_when_no_entities_are_set(self):
         settings = Settings(simulate=True, simulate_room_c=16, temperature_entities="")
         room, last, seen_at = _room(settings, "", 1_000, None, None)

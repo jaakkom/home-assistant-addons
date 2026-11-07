@@ -1,5 +1,5 @@
 name: Autoterm Flow 5
-version: "0.2.1"
+version: "0.2.2"
 slug: autoterm_flow5
 description: >-
   Replaces the Autoterm Flow 5 control panel. Controls and monitors the
@@ -20,56 +20,70 @@ homeassistant_api: true
 services:
   - mqtt:want
 options:
-  serial_port: /dev/ttyUSB0
-  baud: 2400
-  temperature_entities: ""
-  aggregation: min
-  room_target: 20
-  room_drop: 2
-  room_rise: 1
-  min_on_minutes: 10
-  min_off_minutes: 10
-  sensor_stale_minutes: 15
-  coolant_limit: 88
-  coolant_drop: 18
-  shutdown_voltage: 11.5
-  shutdown_voltage_seconds: 30
-  fan_temperature: 40
-  pump_dose_ml: 0.044
-  preheat_minutes: 30
-  extended_telemetry: true
-  circulation_pump: false
-  simulate: false
-  simulate_room_temperature: 15
-  simulate_fault_code: 0
-  mqtt_host: ""
-  mqtt_port: 1883
-  mqtt_username: ""
-  mqtt_password: ""
+  simulation:
+    simulate: false
+    simulate_room_temperature: 15
+    simulate_fault_code: 0
+  device:
+    serial_port: /dev/ttyUSB0
+    baud: 2400
+    extended_telemetry: true
+  temperature:
+    temperature_entities: ""
+    aggregation: min
+    room_target: 20
+    room_drop: 2
+    room_rise: 1
+  timing:
+    min_on_minutes: 10
+    min_off_minutes: 10
+    sensor_stale_minutes: 15
+    preheat_minutes: 30
+    circulation_pump: false
+  protection:
+    coolant_limit: 88
+    coolant_drop: 18
+    shutdown_voltage: 11.5
+    shutdown_voltage_seconds: 30
+    fan_temperature: 40
+  fuel:
+    pump_dose_ml: 0.044
+  mqtt:
+    mqtt_host: ""
+    mqtt_port: 1883
+    mqtt_username: ""
+    mqtt_password: ""
 schema:
-  serial_port: str
-  baud: int(1200,115200)
-  temperature_entities: str?
-  aggregation: list(min|avg|max)
-  room_target: float(0,40)
-  room_drop: float(0,10)
-  room_rise: float(0,10)
-  min_on_minutes: int(0,120)
-  min_off_minutes: int(0,120)
-  sensor_stale_minutes: int(1,120)
-  coolant_limit: float(20,95)
-  coolant_drop: float(1,40)
-  shutdown_voltage: float(9,30)
-  shutdown_voltage_seconds: int(1,600)
-  fan_temperature: float(30,60)
-  pump_dose_ml: float(0.01,0.2)
-  preheat_minutes: int(1,480)
-  extended_telemetry: bool
-  circulation_pump: bool
-  simulate: bool
-  simulate_room_temperature: float(0,40)
-  simulate_fault_code: int(0,255)
-  mqtt_host: str?
-  mqtt_port: port?
-  mqtt_username: str?
-  mqtt_password: password?
+  simulation:
+    simulate: bool
+    simulate_room_temperature: float(0,40)
+    simulate_fault_code: int(0,255)
+  device:
+    serial_port: str
+    baud: int(1200,115200)
+    extended_telemetry: bool
+  temperature:
+    temperature_entities: str?
+    aggregation: list(min|avg|max)
+    room_target: float(0,40)
+    room_drop: float(0,10)
+    room_rise: float(0,10)
+  timing:
+    min_on_minutes: int(0,120)
+    min_off_minutes: int(0,120)
+    sensor_stale_minutes: int(1,120)
+    preheat_minutes: int(1,480)
+    circulation_pump: bool
+  protection:
+    coolant_limit: float(20,95)
+    coolant_drop: float(1,40)
+    shutdown_voltage: float(9,30)
+    shutdown_voltage_seconds: int(1,600)
+    fan_temperature: float(30,60)
+  fuel:
+    pump_dose_ml: float(0.01,0.2)
+  mqtt:
+    mqtt_host: str?
+    mqtt_port: port?
+    mqtt_username: str?
+    mqtt_password: password?

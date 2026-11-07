@@ -18,7 +18,7 @@ Do not connect the red +12 V wire. It powers the panel and is not serial data.
 
 Leave the physical panel disconnected. Two masters on the same connector collide, and the panel can lose communication.
 
-The Mosquitto add-on is required so entities appear through MQTT discovery. Temperature entities are read from the Home Assistant API. Enter them as a comma-separated list, for example `sensor.living_room,sensor.bedroom`.
+The official Mosquitto broker is required so entities appear through MQTT discovery. Leave the MQTT fields empty. The add-on then reads the host, port, username, and password from the Supervisor. Mosquitto 6.5 does not register that service, and the log says `Service not enabled`. Update Mosquitto broker to 7.1 or newer, then restart this add-on. Temperature entities are read from the Home Assistant API. Enter them as a comma-separated list, for example `sensor.living_room,sensor.bedroom`.
 
 ## Control
 
@@ -37,6 +37,8 @@ If the heater returns to idle while heating is still on, and the status frame ha
 There is no power-level command. Low, middle, and high are the heater's own stages and are published as sensors.
 
 Every setting is a Home Assistant number, switch, or select. Changes are stored in `/data/settings.json` and survive a restart. The add-on option page supplies only the initial values. Delete that file to start again from the option page.
+
+The option page is grouped. Simulation and the device link come first, then temperature control, run times, coolant and voltage, fuel, and MQTT. Home Assistant 2025.10 or newer shows the groups. An older flat options file is still accepted.
 
 ## Fuel
 
