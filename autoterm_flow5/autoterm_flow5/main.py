@@ -13,7 +13,7 @@ from .controller import Controller, aggregate
 from .faults import ChangeNotifier, LinkNotifier, Notice, fault_name
 from .fuel import FuelMeter, liters_per_hour
 from .ha import deliver_notice, read_temperature, supervisor_token
-from .link import SerialLink, open_port
+from .link import LinkProgress, SerialLink, open_port
 from .mqtt_bridge import PREFIX, apply_command, collect_state, discovery_messages, state_topic
 from .settings import Settings, load_settings, option_value
 from .simulator import SimulatedHeater
@@ -91,6 +91,7 @@ def run() -> None:
         LOG.info("MQTT connected %s:%s, serial port %s @ %s", host, port, serial_path, baud)
 
     link: SerialLink | None = None
+    progress = LinkProgress()
     last_room: float | None = None
     last_room_at: float | None = None
     try:
@@ -109,6 +110,9 @@ def run() -> None:
             if link is None:
                 try:
                     link = open_link(settings, serial_path, baud)
+                    progress.opened(now)
+                    if not settings.simulate:
+                        LOG.info("Opened %s @ %s, waiting for a status frame", serial_path, baud)
                 except Exception as exc:  # serial port missing or busy
                     LOG.warning("Could not open the serial port: %s", exc)
                     _publish_offline(client, controller, fuel, settings, last_room)
@@ -122,6 +126,7 @@ def run() -> None:
                 if not settings.simulate and link is not None:
                     link.close()
                     link = None
+                    progress.announced_online = False
                 notice = link_notice.update(False)
                 if notice:
                     deliver_notice(notice, token, HA_API)
@@ -143,6 +148,7 @@ def run() -> None:
                         f"{PREFIX}/event/link",
                         json.dumps({"online": result.values.get("link") == "ON", "message": notice.message}),
                     )
+            _log_link(progress, now, link.online(now), result.values.get("mode", ""), serial_path)
             for key, value in result.values.items():
                 client.publish(state_topic(key), value, retain=True)
             if result.frequency_hz:
@@ -164,6 +170,16 @@ class CycleResult:
     values: dict[str, str]
     notices: list[Notice]
     frequency_hz: float
+
+
+def _log_link(progress: LinkProgress, now: float, online: bool, mode: str, serial_path: str) -> None:
+    event = progress.update(now, online)
+    if event == "answered":
+        LOG.info("Heater answered: %s", mode or "status")
+    elif event == "lost":
+        LOG.warning("Heater stopped answering on %s", serial_path)
+    elif event == "silent":
+        LOG.warning("No status frame from the heater on %s", serial_path)
 
 
 def open_link(settings: Settings, serial_path: str, baud: int) -> SerialLink:

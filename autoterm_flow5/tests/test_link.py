@@ -1,6 +1,6 @@
 import unittest
 
-from autoterm_flow5.link import SerialLink
+from autoterm_flow5.link import LinkProgress, SerialLink
 from autoterm_flow5.protocol import PUBR0, status_request
 
 
@@ -33,6 +33,23 @@ class EmptyPort(FakePort):
 
     def close(self) -> None:
         self.closed = True
+
+
+class LinkProgressTests(unittest.TestCase):
+    def test_silence_is_reported_once(self):
+        progress = LinkProgress()
+        progress.opened(0)
+        self.assertIsNone(progress.update(9, False))
+        self.assertEqual(progress.update(10, False), "silent")
+        self.assertIsNone(progress.update(30, False))
+
+    def test_answer_and_loss(self):
+        progress = LinkProgress()
+        progress.opened(0)
+        self.assertEqual(progress.update(1, True), "answered")
+        self.assertIsNone(progress.update(2, True))
+        self.assertEqual(progress.update(3, False), "lost")
+        self.assertIsNone(progress.update(4, False))
 
 
 class LinkTests(unittest.TestCase):

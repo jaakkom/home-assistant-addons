@@ -107,8 +107,40 @@ def open_port(path: str, baud: int):
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
         timeout=0.3,
+        write_timeout=1.0,
         exclusive=True,
     )
+
+
+class LinkProgress:
+    """Decide which link changes are worth one log line."""
+
+    def __init__(self) -> None:
+        self.announced_online = False
+        self.warned_silent = False
+        self.opened_at: float | None = None
+
+    def opened(self, now: float) -> None:
+        self.opened_at = now
+        self.warned_silent = False
+
+    def update(self, now: float, online: bool) -> str | None:
+        """Return answered, lost, silent, or None."""
+        if online:
+            self.warned_silent = False
+            if self.announced_online:
+                return None
+            self.announced_online = True
+            return "answered"
+        if self.announced_online:
+            self.announced_online = False
+            self.opened_at = now
+            self.warned_silent = False
+            return "lost"
+        if self.opened_at is not None and not self.warned_silent and now - self.opened_at >= 10:
+            self.warned_silent = True
+            return "silent"
+        return None
 
 
 def _read_port(port: BinaryIO) -> bytes | None:
