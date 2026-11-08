@@ -53,23 +53,24 @@ class SerialLink:
             return
 
     def poll(self, now: float, commands: list[bytes] | None = None) -> None:
-        """Ask for status. Diagnostic mode is enabled with its own write first.
+        """Listen, then ask. The heater transmits the parameter block on its own.
 
-        Gluing it to the status request makes the heater answer neither: it
-        starts replying while the extra bytes are still being sent.
+        A status request written during that frame breaks the CRC. Finish
+        whatever is already arriving, and only then drive the line.
         """
         self.rx_bytes = 0
         self.other_frames = []
         bad_before = self.framer.bad_crc
+        self._drain(now)
         if self._needs_handshake(now):
             self.port.write(diagnostic_enable())
             self.last_handshake_at = now
-            self._ingest(now)
+            self._drain(now)
         payload = bytearray(status_request())
         for command in commands or []:
             payload.extend(command)
         self.port.write(payload)
-        self._ingest(now)
+        self._drain(now)
         self.bad_crc = self.framer.bad_crc - bad_before
 
     def _needs_handshake(self, now: float) -> bool:
@@ -82,13 +83,8 @@ class SerialLink:
             return True
         return now - self.last_extended_at >= HANDSHAKE_INTERVAL_S
 
-    def _ingest(self, now: float) -> None:
-        """Read until the reply is in, or the line stays quiet.
-
-        A status frame often arrives before the 58-byte frame. Stopping at the
-        status frame drops the slower telemetry and the next request collides
-        with it.
-        """
+    def _drain(self, now: float) -> None:
+        """Read until the line is idle and no half-received frame remains."""
         quiet = 0
         for _ in range(REPLY_READS):
             data = _read_port(self.port)
@@ -96,27 +92,20 @@ class SerialLink:
                 self._empty_reads += 1
                 if self._empty_reads >= 3 and not self._status_is_recent(now):
                     raise ConnectionError("serial port returned no data")
-                continue
-            elif not data:
-                quiet += 1
-            else:
-                quiet = 0
-                self._empty_reads = 0
-                self.rx_bytes += len(data)
-                self._consume(now, data)
-                if self.last_status_at == now and not self._waiting_for_extended(now):
+                if self._status_is_recent(now):
                     return
-            if quiet >= 3:
-                return
-
-    def _waiting_for_extended(self, now: float) -> bool:
-        if not self.extended_telemetry:
-            return False
-        if self.last_extended_at == now:
-            return False
-        if self.last_extended_at is None:
-            return True
-        return self.last_handshake_at == now or now - self.last_extended_at >= HANDSHAKE_INTERVAL_S
+                continue
+            if not data:
+                quiet += 1
+                # One quiet read is a gap between frames. A partial frame gets
+                # a little longer, in case the rest is still coming.
+                if self.framer.pending == 0 or quiet >= 3:
+                    return
+                continue
+            quiet = 0
+            self._empty_reads = 0
+            self.rx_bytes += len(data)
+            self._consume(now, data)
 
     def _status_is_recent(self, now: float) -> bool:
         return self.last_status_at is not None and now - self.last_status_at <= STATUS_GAP_S
