@@ -24,6 +24,8 @@ TYPE_STATUS = 0x0F
 TYPE_CABIN_TEMP = 0x11
 TYPE_PUMP = 0x21
 TYPE_EXTENDED = 0x01
+# Autoterm Test asks for the parameter block with device 0x02 and type 0x00.
+TYPE_DIAGNOSTIC = 0x00
 
 HEADER_LEN = 5
 CRC_LEN = 2
@@ -96,6 +98,18 @@ def build_frame(dev: int, msg_type: int, payload: bytes = b"") -> bytes:
 
 def status_request() -> bytes:
     return build_frame(DEV_PANEL, TYPE_STATUS)
+
+
+def diagnostic_request() -> bytes:
+    """Ask for the 58-byte parameter block.
+
+    Autoterm Test 1.17.3.0 sends this from Timer3 every eight seconds while
+    the port is open. It is device 0x02, type 0x00, and an empty payload.
+    The status request stays on device 0x03 type 0x0F and only returns the
+    18-byte status. This is not the panel start command: that is device
+    0x03 type 0x01.
+    """
+    return build_frame(DEV_EXTENDED, TYPE_DIAGNOSTIC)
 
 
 def stop_command() -> bytes:
@@ -316,6 +330,10 @@ def classify(frame: Frame) -> StatusFrame | ExtendedFrame | None:
         return None
     if frame.dev == DEV_HEATER and frame.msg_type == TYPE_STATUS:
         return decode_status(frame.payload)
-    if frame.dev == DEV_EXTENDED and frame.msg_type == TYPE_EXTENDED and frame.length == EXTENDED_LEN:
+    if (
+        frame.dev == DEV_EXTENDED
+        and frame.msg_type in (TYPE_EXTENDED, TYPE_DIAGNOSTIC)
+        and frame.length == EXTENDED_LEN
+    ):
         return decode_extended(frame.payload)
     return None

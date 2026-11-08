@@ -1,7 +1,7 @@
 import unittest
 
 from autoterm_flow5.link import LinkProgress, SerialLink, TelemetryLog
-from autoterm_flow5.protocol import PUBR0, build_frame, decode_extended, status_request
+from autoterm_flow5.protocol import build_frame, decode_extended, diagnostic_request, status_request
 
 
 class FakePort:
@@ -119,16 +119,27 @@ class LinkTests(unittest.TestCase):
         link = SerialLink(port, extended_telemetry=True)
         link.poll(0)
         written = bytes(port.written)
-        self.assertTrue(written.startswith(PUBR0))
+        self.assertTrue(written.startswith(diagnostic_request()))
         self.assertIn(status_request(), written)
-        self.assertLess(written.index(PUBR0), written.index(status_request()))
+        self.assertLess(written.index(diagnostic_request()), written.index(status_request()))
         port.written.clear()
         link.poll(4)
-        self.assertNotIn(PUBR0, bytes(port.written))
+        self.assertNotIn(diagnostic_request(), bytes(port.written))
         self.assertTrue(bytes(port.written).startswith(status_request()))
         port.written.clear()
         link.poll(5)
-        self.assertIn(PUBR0, bytes(port.written))
+        self.assertIn(diagnostic_request(), bytes(port.written))
+
+    def test_diagnostic_query_repeats_eight_seconds_after_a_frame(self):
+        port = FakePort()
+        link = SerialLink(port, extended_telemetry=True)
+        link.last_extended_at = 0
+        link.last_handshake_at = 0
+        link.poll(7)
+        self.assertNotIn(diagnostic_request(), bytes(port.written))
+        port.written.clear()
+        link.poll(8)
+        self.assertTrue(bytes(port.written).startswith(diagnostic_request()))
 
 
 def _extended_frame():

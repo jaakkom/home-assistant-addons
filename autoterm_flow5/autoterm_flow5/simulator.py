@@ -6,7 +6,16 @@ frames and reads status frames back. No UART device is opened.
 
 from __future__ import annotations
 
-from .protocol import DEV_EXTENDED, DEV_HEATER, DEV_PANEL, PUBR0, TYPE_EXTENDED, TYPE_STATUS, Framer, build_frame
+from .protocol import (
+    DEV_EXTENDED,
+    DEV_HEATER,
+    DEV_PANEL,
+    TYPE_DIAGNOSTIC,
+    TYPE_EXTENDED,
+    TYPE_STATUS,
+    Framer,
+    build_frame,
+)
 
 
 class SimulatedHeater:
@@ -24,13 +33,14 @@ class SimulatedHeater:
         self._pending = bytearray()
 
     def write(self, data: bytes) -> None:
-        payload = data
-        if PUBR0 in payload:
-            self.extended_enabled = True
-            self.events.append("handshake")
-            payload = payload.replace(PUBR0, b"")
-        for frame in Framer().feed(payload):
-            if not frame.crc_ok or frame.dev != DEV_PANEL:
+        for frame in Framer().feed(data):
+            if not frame.crc_ok:
+                continue
+            if frame.dev == DEV_EXTENDED and frame.msg_type == TYPE_DIAGNOSTIC and frame.length == 0:
+                self.extended_enabled = True
+                self.events.append("diagnostic")
+                continue
+            if frame.dev != DEV_PANEL:
                 continue
             if frame.msg_type == TYPE_STATUS:
                 self.events.append("status")
