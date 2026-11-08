@@ -17,7 +17,7 @@ HANDSHAKE_INTERVAL_S = 60.0
 LINK_TIMEOUT_S = 15.0
 # Keep listening after a request. One 0.3 s read misses a slow reply, and the
 # next request then collides with it.
-REPLY_READS = 4
+REPLY_READS = 8
 STATUS_GAP_S = 30.0
 # pyserial raises this when select says the port is readable and read
 # returns nothing. One such result is an empty poll, not a lost adapter.
@@ -67,7 +67,12 @@ class SerialLink:
         return now - self.last_extended_at >= HANDSHAKE_INTERVAL_S
 
     def _ingest(self, now: float) -> None:
-        """Read until a status frame arrives or the reply window goes quiet."""
+        """Read until the reply is in, or the line stays quiet.
+
+        A status frame often arrives before the 58-byte frame. Stopping at the
+        status frame drops the slower telemetry and the next request collides
+        with it.
+        """
         quiet = 0
         for _ in range(REPLY_READS):
             data = _read_port(self.port)
@@ -81,10 +86,20 @@ class SerialLink:
             else:
                 quiet = 0
                 self._empty_reads = 0
-                if self._consume(now, data):
+                self._consume(now, data)
+                if self.last_status_at == now and not self._waiting_for_extended(now):
                     return
             if quiet >= 3:
                 return
+
+    def _waiting_for_extended(self, now: float) -> bool:
+        if not self.extended_telemetry:
+            return False
+        if self.last_extended_at == now:
+            return False
+        if self.last_extended_at is None:
+            return True
+        return self.last_handshake_at == now or now - self.last_extended_at >= HANDSHAKE_INTERVAL_S
 
     def _status_is_recent(self, now: float) -> bool:
         return self.last_status_at is not None and now - self.last_status_at <= STATUS_GAP_S
@@ -171,13 +186,21 @@ class TelemetryLog:
         self._ok = False
         self._missing = False
         self._last_ok_at: float | None = None
+        self._mode: str | None = None
 
-    def update(self, now: float, enabled: bool, link: SerialLink) -> tuple[str, str] | None:
+    def update(self, now: float, enabled: bool, link: SerialLink) -> list[tuple[str, str]]:
         if not enabled:
             self._ok = False
             self._missing = False
             self._last_ok_at = None
-            return None
+            self._mode = None
+            return []
+        lines: list[tuple[str, str]] = []
+        mode = link.status.mode_name if link.status is not None else None
+        mode_changed = mode is not None and mode != self._mode
+        if mode_changed:
+            self._mode = mode
+            lines.append(("info", f"heater status: {mode}"))
         fresh = (
             link.extended is not None
             and link.last_extended_at is not None
@@ -187,25 +210,33 @@ class TelemetryLog:
             self._missing = False
             due = self._last_ok_at is None or now - self._last_ok_at >= HANDSHAKE_INTERVAL_S
             if self._ok and not due:
-                return None
+                return lines
             self._ok = True
             self._last_ok_at = now
             frame = link.extended
             assert frame is not None
-            return (
-                "info",
-                f"58-byte telemetry ok: {frame.mode_name}, {frame.voltage:.2f} V, "
-                f"pump {frame.pump_hz:.2f} Hz, flame {frame.flame_c:.0f} °C",
+            lines.append(
+                (
+                    "info",
+                    f"58-byte telemetry ok: {frame.mode_name}, {frame.voltage:.2f} V, "
+                    f"pump {frame.pump_hz:.2f} Hz, flame {frame.flame_c:.0f} °C",
+                )
             )
+            return lines
         self._ok = False
         self._last_ok_at = None
-        if self._missing:
-            return None
+        if self._missing and not mode_changed and link.last_handshake_at != now:
+            return lines
         self._missing = True
         if link.last_extended_at is None:
-            return ("warning", "58-byte telemetry has not arrived")
+            if link.last_handshake_at == now:
+                lines.append(("warning", "requesting 58-byte telemetry, no frame yet"))
+            else:
+                lines.append(("warning", "58-byte telemetry has not arrived"))
+            return lines
         age = now - link.last_extended_at
-        return ("warning", f"58-byte telemetry stopped, last frame {age:.0f} s ago")
+        lines.append(("warning", f"58-byte telemetry stopped, last frame {age:.0f} s ago"))
+        return lines
 
 
 def _read_port(port: BinaryIO) -> bytes | None:
