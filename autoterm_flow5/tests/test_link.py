@@ -93,6 +93,26 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(link.status.mode_name, "Ignition 1")
         self.assertEqual(port.writes, 1)
 
+    def test_extended_frame_after_the_status_is_read_in_the_same_poll(self):
+        status_payload = bytes.fromhex("02030046460081430001015cff0100000000")
+        raw = bytearray(58)
+        raw[0] = 3
+        raw[1] = 2
+        raw[15] = 38
+        raw[17], raw[18] = 0x01, 0xF4
+        raw[22], raw[23] = 0, 125
+        port = FakePort()
+        port.chunks = [
+            build_frame(0x04, 0x0F, status_payload),
+            build_frame(0x02, 0x01, bytes(raw)),
+        ]
+        link = SerialLink(port, extended_telemetry=True)
+        link.poll(5)
+        self.assertEqual(link.status.mode_name, "Ignition 1")
+        self.assertEqual(link.last_extended_at, 5)
+        self.assertEqual(link.extended.voltage, 12.5)
+        self.assertEqual(port.writes, 1)
+
     def test_poll_requests_status_and_handshake_once(self):
         port = FakePort()
         link = SerialLink(port, extended_telemetry=True)
@@ -121,34 +141,49 @@ class TelemetryLogTests(unittest.TestCase):
         link.extended = _extended_frame()
         link.last_extended_at = 10
         progress = TelemetryLog()
-        self.assertIsNone(progress.update(10, False, link))
+        self.assertEqual(progress.update(10, False, link), [])
         first = progress.update(10, True, link)
-        self.assertEqual(first[0], "info")
-        self.assertIn("12.50 V", first[1])
-        self.assertIn("3.80 Hz", first[1])
-        self.assertIn("High", first[1])
-        self.assertIsNone(progress.update(20, True, link))
+        self.assertEqual(first[0][0], "info")
+        self.assertIn("12.50 V", first[0][1])
+        self.assertIn("3.80 Hz", first[0][1])
+        self.assertIn("High", first[0][1])
+        self.assertEqual(progress.update(20, True, link), [])
         link.last_extended_at = 70
-        self.assertEqual(progress.update(70, True, link)[0], "info")
+        self.assertEqual(progress.update(70, True, link)[0][0], "info")
 
     def test_debug_warns_once_when_the_frame_never_arrives(self):
         link = SerialLink(FakePort(), extended_telemetry=True)
         progress = TelemetryLog()
-        self.assertEqual(progress.update(1, True, link), ("warning", "58-byte telemetry has not arrived"))
-        self.assertIsNone(progress.update(2, True, link))
-        self.assertIsNone(progress.update(3, False, link))
-        self.assertEqual(progress.update(4, True, link)[0], "warning")
+        self.assertEqual(progress.update(1, True, link), [("warning", "58-byte telemetry has not arrived")])
+        self.assertEqual(progress.update(2, True, link), [])
+        self.assertEqual(progress.update(3, False, link), [])
+        self.assertEqual(progress.update(4, True, link)[0][0], "warning")
+
+    def test_debug_repeats_when_the_heater_status_changes(self):
+        link = SerialLink(FakePort(), extended_telemetry=True)
+        link.status = type("Status", (), {"mode_name": "Waiting for a command"})()
+        progress = TelemetryLog()
+        first = progress.update(1, True, link)
+        self.assertIn(("info", "heater status: Waiting for a command"), first)
+        self.assertIn(("warning", "58-byte telemetry has not arrived"), first)
+        link.status = type("Status", (), {"mode_name": "Ignition 1"})()
+        second = progress.update(2, True, link)
+        self.assertIn(("info", "heater status: Ignition 1"), second)
+        self.assertIn(("warning", "58-byte telemetry has not arrived"), second)
+        link.last_handshake_at = 61
+        third = progress.update(61, True, link)
+        self.assertEqual(third, [("warning", "requesting 58-byte telemetry, no frame yet")])
 
     def test_debug_reports_when_a_frame_stops(self):
         link = SerialLink(FakePort(), extended_telemetry=True)
         link.extended = _extended_frame()
         link.last_extended_at = 0
         progress = TelemetryLog()
-        self.assertEqual(progress.update(0, True, link)[0], "info")
+        self.assertEqual(progress.update(0, True, link)[0][0], "info")
         stopped = progress.update(60, True, link)
-        self.assertEqual(stopped[0], "warning")
-        self.assertIn("60 s ago", stopped[1])
-        self.assertIsNone(progress.update(61, True, link))
+        self.assertEqual(stopped[0][0], "warning")
+        self.assertIn("60 s ago", stopped[0][1])
+        self.assertEqual(progress.update(61, True, link), [])
 
 
 if __name__ == "__main__":

@@ -167,9 +167,7 @@ def run() -> None:
             elif debug_was_on and not settings.debug:
                 LOG.info("Debug log off")
             debug_was_on = settings.debug
-            note = telemetry_log.update(now, settings.debug, link)
-            if note is not None:
-                level, text = note
+            for level, text in telemetry_log.update(now, settings.debug, link):
                 if level == "warning":
                     LOG.warning("Debug: %s", text)
                 else:

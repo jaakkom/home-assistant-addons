@@ -52,7 +52,7 @@ Set **Tank capacity** to the tank size in litres. The level stays unknown until 
 
 Extended telemetry is requested with the `PUBR0` handshake. It is on by default. If the 58-byte frame does not arrive, the handshake is sent again about once a minute.
 
-**Debug log** prints whether that frame arrives. Turn it on from the add-on configuration or from the Debug log switch. The configuration value is applied on every start. The switch takes effect on the next poll and lasts until the next restart. While it is on, the log says `Debug: 58-byte telemetry ok` with mode, voltage, pump frequency, and flame temperature, and repeats that about once a minute. If the frame is missing, the log says `Debug: 58-byte telemetry has not arrived`. The short status line `Heater answered` does not mean the 58-byte frame arrived. The diagnostic binary sensor **Telemetry stale** shows the same fact in Home Assistant.
+**Debug log** prints whether that frame arrives. Turn it on from the add-on configuration or from the Debug log switch. The configuration value is applied on every start. The switch takes effect on the next poll and lasts until the next restart. While it is on, each heater status change is logged, for example `Debug: heater status: Ignition 1`. The log says `Debug: 58-byte telemetry ok` with mode, voltage, pump frequency, and flame temperature, and repeats that about once a minute. If the frame is missing, the log says so at startup, again when the heater status changes, and again each time the handshake is sent. The short status line `Heater answered` does not mean the 58-byte frame arrived. The diagnostic binary sensor **Telemetry stale** shows the same fact in Home Assistant.
 
 ## Fault codes
 
