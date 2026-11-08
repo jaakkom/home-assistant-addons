@@ -37,6 +37,7 @@ def _sensor(
     state_class: str | None = None,
     diagnostic: bool = False,
     icon: str | None = None,
+    precision: int | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "name": name,
@@ -55,6 +56,8 @@ def _sensor(
         payload["entity_category"] = "diagnostic"
     if icon:
         payload["icon"] = icon
+    if precision is not None:
+        payload["suggested_display_precision"] = precision
     return {"component": "sensor", "key": key, "payload": payload}
 
 
@@ -140,9 +143,21 @@ def discovery_messages() -> list[tuple[str, str]]:
         _sensor("fan_current", "Fan current", unit="mA", diagnostic=True),
         _sensor("ext_hex", "Extended frame hex", diagnostic=True),
         _sensor("fuel_lph", "Fuel consumption", unit="L/h", state_class="measurement", icon="mdi:fuel"),
+        _sensor("fuel_avg_lph", "Fuel hour average", unit="L/h", state_class="measurement", icon="mdi:fuel", precision=3),
         _sensor("fuel_ml_min", "Fuel consumption per minute", unit="mL/min", state_class="measurement", diagnostic=True),
         _sensor("fuel_total_l", "Fuel total", unit="L", state_class="total_increasing", icon="mdi:fuel"),
         _sensor("fuel_total_ml", "Fuel total ml", unit="mL", state_class="total_increasing", diagnostic=True),
+        _sensor("fuel_level_percent", "Fuel level", unit="%", state_class="measurement", icon="mdi:gauge", precision=0),
+        _sensor("fuel_remaining_l", "Fuel remaining", unit="L", state_class="measurement", icon="mdi:fuel", precision=2),
+        _sensor(
+            "fuel_hours",
+            "Fuel time remaining",
+            unit="h",
+            device_class="duration",
+            state_class="measurement",
+            icon="mdi:timer-sand",
+            precision=1,
+        ),
         _sensor("room", "Control temperature", unit="°C", device_class="temperature", state_class="measurement"),
         _binary("demand", "Heat demand"),
         _binary("link", "Link", device_class="connectivity"),
@@ -160,6 +175,8 @@ def discovery_messages() -> list[tuple[str, str]]:
         _number("shutdown_voltage_seconds", "Shutdown voltage time", 1, 600, 1, "s"),
         _number("fan_temperature", "Fan start temperature", 30, 60, 1, "°C"),
         _number("pump_dose", "Pump dose", 0.01, 0.2, 0.001, "mL"),
+        _number("tank_capacity", "Tank capacity", 0, 500, 0.5, "L"),
+        _number("fuel_level", "Fuel in tank", 0, 500, 0.1, "L"),
         _number("preheat_minutes", "Preheat duration", 1, 480, 1, "min"),
         _number("simulate_room", "Simulated room temperature", 0, 40, 0.5, "°C", category="config"),
         _number("simulate_fault", "Simulated fault code", 0, 255, 1, category="config"),
@@ -201,6 +218,14 @@ def discovery_messages() -> list[tuple[str, str]]:
         "availability_topic": f"{PREFIX}/availability",
         "device": DEVICE,
         "entity_category": "config",
+    })))
+    messages.append((f"homeassistant/button/{PREFIX}/fuel_refuel/config", json.dumps({
+        "name": "Tank filled",
+        "unique_id": f"{PREFIX}_fuel_refuel",
+        "command_topic": set_topic("fuel_refuel"),
+        "availability_topic": f"{PREFIX}/availability",
+        "device": DEVICE,
+        "icon": "mdi:gas-station",
     })))
     messages.append((f"homeassistant/select/{PREFIX}/mode/config", json.dumps({
         "name": "Mode",
@@ -306,9 +331,15 @@ def collect_state(
         "fan_current": extended.fan_current if extended else "",
         "ext_hex": extended.hex if extended else "",
         "fuel_lph": f"{liters_per_hour(frequency_hz, settings.pump_dose_ml):.4f}",
+        "fuel_avg_lph": f"{fuel.average_lph():.4f}",
         "fuel_ml_min": f"{milliliters_per_minute(frequency_hz, settings.pump_dose_ml):.4f}",
         "fuel_total_l": f"{fuel.total_liters:.4f}",
         "fuel_total_ml": f"{fuel.total_ml:.4f}",
+        "fuel_level_percent": _num(fuel.level_percent(settings.tank_capacity_l)),
+        "fuel_remaining_l": _num(fuel.remaining_liters),
+        "fuel_hours": _num(fuel.hours_remaining()),
+        "tank_capacity": settings.tank_capacity_l,
+        "fuel_level": _num(fuel.remaining_liters),
         "room": _num(room_c),
         "demand": "ON" if controller.demand else "OFF",
         "link": "ON" if online else "OFF",
@@ -346,7 +377,14 @@ def collect_state(
     return {key: "" if value is None else str(value) for key, value in values.items()}
 
 
-def apply_command(controller: Controller, settings: Settings, topic: str, payload: str, now: float) -> str | None:
+def apply_command(
+    controller: Controller,
+    settings: Settings,
+    topic: str,
+    payload: str,
+    now: float,
+    fuel: FuelMeter | None = None,
+) -> str | None:
     """Apply one retained or live command. Return 'reset-fuel' when asked."""
     key = topic.removeprefix(f"{PREFIX}/set/")
     text = payload.strip()
@@ -356,6 +394,17 @@ def apply_command(controller: Controller, settings: Settings, topic: str, payloa
         controller.request_stop(now)
     elif key == "fuel_reset":
         return "reset-fuel"
+    elif key == "fuel_refuel":
+        if fuel is not None and fuel.refuel(settings.tank_capacity_l):
+            fuel.save()
+    elif key == "fuel_level":
+        if fuel is None:
+            return None
+        try:
+            fuel.set_level_liters(float(text), settings.tank_capacity_l)
+        except ValueError:
+            return None
+        fuel.save()
     elif key == "mode" and text in {"thermostat", "preheat", "pump"}:
         controller.set_mode(text)
     elif key == "climate_mode":
@@ -376,6 +425,8 @@ def apply_command(controller: Controller, settings: Settings, topic: str, payloa
     controller.settings = settings.sanitized()
     for field_name, value in vars(controller.settings).items():
         setattr(settings, field_name, value)
+    if fuel is not None and fuel.clamp_to_capacity(settings.tank_capacity_l):
+        fuel.save()
     return None
 
 
@@ -404,6 +455,8 @@ def _apply_number(settings: Settings, key: str, text: str) -> None:
         settings.fan_temperature = float(text)
     elif key == "pump_dose":
         settings.pump_dose_ml = float(text)
+    elif key == "tank_capacity":
+        settings.tank_capacity_l = float(text)
     elif key == "preheat_minutes":
         settings.preheat_minutes = int(float(text))
     elif key == "simulate_room":

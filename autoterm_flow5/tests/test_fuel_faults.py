@@ -4,6 +4,7 @@ from pathlib import Path
 
 from autoterm_flow5.faults import ChangeNotifier, fault_name
 from autoterm_flow5.fuel import FuelMeter, liters_per_hour
+from autoterm_flow5.settings import settings_from_options
 
 
 class FuelTests(unittest.TestCase):
@@ -35,6 +36,79 @@ class FuelTests(unittest.TestCase):
             self.assertAlmostEqual(restored.total_ml, 0.176, places=6)
             restored.reset()
             self.assertEqual(FuelMeter(path).total_ml, 0)
+
+    def test_tank_level_percent_and_runtime(self):
+        meter = FuelMeter()
+        self.assertIsNone(meter.level_percent(10))
+        self.assertIsNone(meter.hours_remaining())
+        self.assertFalse(meter.refuel(0))
+        self.assertTrue(meter.refuel(10))
+        self.assertEqual(meter.remaining_ml, 10000)
+        self.assertEqual(meter.level_percent(10), 100)
+        meter.update(0, 2.0, 0.044)
+        self.assertIsNone(meter.hours_remaining())
+        meter.update(2, 0.0, 0.044)
+        self.assertAlmostEqual(meter.remaining_ml, 10000 - 0.176, places=6)
+        self.assertAlmostEqual(meter.level_percent(10), 99.99824, places=4)
+        self.assertAlmostEqual(meter.average_lph(), liters_per_hour(2, 0.044), places=4)
+        self.assertAlmostEqual(meter.hours_remaining(), meter.remaining_liters / liters_per_hour(2, 0.044), places=4)
+
+    def test_gap_does_not_reduce_the_tank(self):
+        meter = FuelMeter()
+        meter.refuel(10)
+        meter.update(0, 2.0, 0.044)
+        meter.update(6, 2.0, 0.044)
+        self.assertEqual(meter.remaining_ml, 10000)
+
+    def test_partial_fill_and_capacity_cap(self):
+        meter = FuelMeter()
+        meter.set_level_liters(12, 10)
+        self.assertEqual(meter.remaining_ml, 10000)
+        meter.set_level_liters(4, 10)
+        self.assertEqual(meter.remaining_ml, 4000)
+        self.assertTrue(meter.clamp_to_capacity(3))
+        self.assertEqual(meter.remaining_ml, 3000)
+        self.assertEqual(meter.level_percent(3), 100)
+
+    def test_total_reset_keeps_the_tank_level(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fuel.json"
+            meter = FuelMeter(path)
+            meter.refuel(10)
+            meter.update(0, 2.0, 0.044)
+            meter.update(2, 2.0, 0.044)
+            meter.reset()
+            restored = FuelMeter(path)
+            self.assertEqual(restored.total_ml, 0)
+            self.assertAlmostEqual(restored.remaining_ml, 10000 - 0.176, places=6)
+            self.assertAlmostEqual(restored.average_lph(), liters_per_hour(2, 0.044), places=4)
+
+    def test_hour_average_includes_idle_and_drops_old_use(self):
+        meter = FuelMeter()
+        meter.refuel(10)
+        meter.update(0, 2.0, 0.044)
+        meter.update(4, 0.0, 0.044)
+        burn = liters_per_hour(2, 0.044)
+        self.assertAlmostEqual(meter.average_lph(), burn, places=4)
+        meter.update(8, 0.0, 0.044)
+        self.assertAlmostEqual(meter.average_lph(), burn / 2, places=4)
+        self.assertAlmostEqual(meter.hours_remaining(), meter.remaining_liters / (burn / 2), places=4)
+        meter.update(3604, 0.0, 0.044)
+        meter.update(3608, 0.0, 0.044)
+        self.assertEqual(meter.average_lph(), 0.0)
+        self.assertIsNone(meter.hours_remaining())
+
+    def test_old_fuel_file_has_no_level(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fuel.json"
+            path.write_text('{"total_ml": 12}', encoding="utf-8")
+            restored = FuelMeter(path)
+            self.assertEqual(restored.total_ml, 12)
+            self.assertIsNone(restored.remaining_ml)
+
+    def test_options_read_tank_capacity(self):
+        settings = settings_from_options({"fuel": {"tank_capacity_l": 42}})
+        self.assertEqual(settings.tank_capacity_l, 42)
 
 
 class FaultTests(unittest.TestCase):

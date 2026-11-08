@@ -51,6 +51,8 @@ def run() -> None:
     settings.save(SETTINGS_PATH)
     controller = Controller(settings)
     fuel = FuelMeter(FUEL_PATH, settings.pump_dose_ml)
+    if fuel.clamp_to_capacity(settings.tank_capacity_l):
+        fuel.save()
     faults = ChangeNotifier("autoterm_flow5_fault", "Autoterm Flow 5")
     link_notice = LinkNotifier()
     token = supervisor_token()
@@ -96,7 +98,7 @@ def run() -> None:
             now = time.time()
             while pending:
                 topic, payload = pending.pop(0)
-                action = apply_command(controller, settings, topic, payload, now)
+                action = apply_command(controller, settings, topic, payload, now, fuel)
                 if action == "reset-fuel":
                     fuel.reset()
                 settings.save(SETTINGS_PATH)
@@ -185,7 +187,8 @@ def step(
     output = controller.tick(now, link.status, link.extended, room_c, room_age_s)
     link.poll(now, output.commands)
     frequency = link.extended.pump_hz if link.extended is not None else 0.0
-    if fuel.update(now, frequency, settings.pump_dose_ml) > 0:
+    fuel.update(now, frequency, settings.pump_dose_ml)
+    if fuel.pending_save:
         fuel.save()
     online = link.online(now)
     notices: list[Notice] = []
