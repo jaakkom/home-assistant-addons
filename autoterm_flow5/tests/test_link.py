@@ -107,6 +107,7 @@ class LinkTests(unittest.TestCase):
             build_frame(0x02, 0x01, bytes(raw)),
         ]
         link = SerialLink(port, extended_telemetry=True)
+        link.last_handshake_at = 4
         link.poll(5)
         self.assertEqual(link.status.mode_name, "Ignition 1")
         self.assertEqual(link.last_extended_at, 5)
@@ -117,12 +118,17 @@ class LinkTests(unittest.TestCase):
         port = FakePort()
         link = SerialLink(port, extended_telemetry=True)
         link.poll(0)
-        self.assertTrue(bytes(port.written).startswith(status_request()))
-        self.assertIn(PUBR0, bytes(port.written))
+        written = bytes(port.written)
+        self.assertTrue(written.startswith(PUBR0))
+        self.assertIn(status_request(), written)
+        self.assertLess(written.index(PUBR0), written.index(status_request()))
         port.written.clear()
-        link.poll(10)
+        link.poll(4)
         self.assertNotIn(PUBR0, bytes(port.written))
         self.assertTrue(bytes(port.written).startswith(status_request()))
+        port.written.clear()
+        link.poll(5)
+        self.assertIn(PUBR0, bytes(port.written))
 
 
 def _extended_frame():
@@ -154,7 +160,10 @@ class TelemetryLogTests(unittest.TestCase):
     def test_debug_warns_once_when_the_frame_never_arrives(self):
         link = SerialLink(FakePort(), extended_telemetry=True)
         progress = TelemetryLog()
-        self.assertEqual(progress.update(1, True, link), [("warning", "58-byte telemetry has not arrived")])
+        self.assertEqual(
+            progress.update(1, True, link),
+            [("warning", "58-byte telemetry has not arrived, heard 0 bytes")],
+        )
         self.assertEqual(progress.update(2, True, link), [])
         self.assertEqual(progress.update(3, False, link), [])
         self.assertEqual(progress.update(4, True, link)[0][0], "warning")
@@ -165,14 +174,15 @@ class TelemetryLogTests(unittest.TestCase):
         progress = TelemetryLog()
         first = progress.update(1, True, link)
         self.assertIn(("info", "heater status: Waiting for a command"), first)
-        self.assertIn(("warning", "58-byte telemetry has not arrived"), first)
+        self.assertIn(("warning", "58-byte telemetry has not arrived, heard 0 bytes"), first)
         link.status = type("Status", (), {"mode_name": "Ignition 1"})()
         second = progress.update(2, True, link)
         self.assertIn(("info", "heater status: Ignition 1"), second)
-        self.assertIn(("warning", "58-byte telemetry has not arrived"), second)
+        self.assertTrue(any("has not arrived" in text for _level, text in second))
         link.last_handshake_at = 61
+        link.rx_bytes = 25
         third = progress.update(61, True, link)
-        self.assertEqual(third, [("warning", "requesting 58-byte telemetry, no frame yet")])
+        self.assertEqual(third, [("warning", "requesting 58-byte telemetry, no frame yet, heard 25 bytes")])
 
     def test_debug_reports_when_a_frame_stops(self):
         link = SerialLink(FakePort(), extended_telemetry=True)
@@ -183,6 +193,7 @@ class TelemetryLogTests(unittest.TestCase):
         stopped = progress.update(60, True, link)
         self.assertEqual(stopped[0][0], "warning")
         self.assertIn("60 s ago", stopped[0][1])
+        self.assertIn("heard 0 bytes", stopped[0][1])
         self.assertEqual(progress.update(61, True, link), [])
 
 
