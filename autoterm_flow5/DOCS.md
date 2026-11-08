@@ -22,7 +22,7 @@ The official Mosquitto broker is required so entities appear through MQTT discov
 
 ## Control
 
-The climate entity holds the room target. Heating does not start when the add-on boots. Turn it on from the climate entity or the switch, or select preheat or pump-only mode.
+The climate entity holds the room target. Heating does not start when the add-on boots. Restarting the add-on leaves a burner that is already running alone: it does not send stop, and it does not send a new start. Turn heating on from the climate entity or the switch, or select preheat or pump-only mode. Turning it off is what sends stop.
 
 Room temperature comes from Home Assistant sensors. The coldest reading is used by default. That same reading is sent to the heater as the panel cabin temperature. The setpoint itself is not sent on the wire.
 
