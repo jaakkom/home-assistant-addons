@@ -1,4 +1,4 @@
-"""Serial poll loop. The heater answers; it does not speak first."""
+"""Serial poll loop. Status is requested. The long frame is a stream the heater sends after diagnostic mode is enabled."""
 
 from __future__ import annotations
 
@@ -9,15 +9,12 @@ from .protocol import (
     Framer,
     StatusFrame,
     classify,
-    diagnostic_request,
+    diagnostic_enable,
     status_request,
 )
 
 HANDSHAKE_INTERVAL_S = 60.0
-# Autoterm Test requests the parameter block every eight seconds.
-DIAGNOSTIC_INTERVAL_S = 8.0
-# Until a 58-byte frame has arrived, repeat the request sooner. A miss on
-# the first try must not wait for the normal interval.
+# Until a parameter frame has arrived, repeat the enable command sooner.
 HANDSHAKE_RETRY_S = 5.0
 LINK_TIMEOUT_S = 15.0
 # Keep listening after a request. One 0.3 s read misses a slow reply, and the
@@ -56,7 +53,7 @@ class SerialLink:
             return
 
     def poll(self, now: float, commands: list[bytes] | None = None) -> None:
-        """Ask for status. The diagnostic query goes out on its own first.
+        """Ask for status. Diagnostic mode is enabled with its own write first.
 
         Gluing it to the status request makes the heater answer neither: it
         starts replying while the extra bytes are still being sent.
@@ -65,7 +62,7 @@ class SerialLink:
         self.other_frames = []
         bad_before = self.framer.bad_crc
         if self._needs_handshake(now):
-            self.port.write(diagnostic_request())
+            self.port.write(diagnostic_enable())
             self.last_handshake_at = now
             self._ingest(now)
         payload = bytearray(status_request())
@@ -78,12 +75,12 @@ class SerialLink:
     def _needs_handshake(self, now: float) -> bool:
         if not self.extended_telemetry:
             return False
-        interval = DIAGNOSTIC_INTERVAL_S if self.last_extended_at is not None else HANDSHAKE_RETRY_S
+        interval = HANDSHAKE_INTERVAL_S if self.last_extended_at is not None else HANDSHAKE_RETRY_S
         if self.last_handshake_at is not None and now - self.last_handshake_at < interval:
             return False
         if self.last_extended_at is None:
             return True
-        return now - self.last_extended_at >= DIAGNOSTIC_INTERVAL_S
+        return now - self.last_extended_at >= HANDSHAKE_INTERVAL_S
 
     def _ingest(self, now: float) -> None:
         """Read until the reply is in, or the line stays quiet.
@@ -251,7 +248,7 @@ class TelemetryLog:
         self._missing = True
         if link.last_extended_at is None:
             if link.last_handshake_at == now:
-                text = "requesting 58-byte telemetry, no frame yet"
+                text = "diagnostic reports requested, no 58-byte frame yet"
             else:
                 text = "58-byte telemetry has not arrived"
         else:

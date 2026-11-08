@@ -3,6 +3,7 @@ import unittest
 from autoterm_flow5.protocol import (
     PUBR0,
     classify,
+    diagnostic_enable,
     diagnostic_request,
     Framer,
     build_frame,
@@ -20,6 +21,7 @@ class CrcTests(unittest.TestCase):
     def test_status_and_stop_vectors(self):
         self.assertEqual(status_request().hex(), "aa0300000f587c")
         self.assertEqual(diagnostic_request().hex(), "aa02000000a03d")
+        self.assertEqual(diagnostic_enable().hex(), "aa03010007011d9e")
         self.assertEqual(stop_command().hex(), "aa030000035d7c")
         self.assertEqual(crc16_modbus(bytes.fromhex("aa0300000f")), 0x587C)
 
@@ -97,6 +99,10 @@ class StatusTests(unittest.TestCase):
         echoed = build_frame(0x02, 0x00, bytes(raw))
         frame = Framer().feed(echoed)[0]
         self.assertEqual(classify(frame).voltage, 12.5)
+        longer = build_frame(0x02, 0x01, bytes(raw) + bytes(14))
+        frame = Framer().feed(longer)[0]
+        self.assertEqual(frame.length, 72)
+        self.assertEqual(classify(frame).pump_hz, 3.8)
 
     def test_pubr0_literal(self):
         self.assertTrue(PUBR0.startswith(bytes.fromhex("aa5055425230")))

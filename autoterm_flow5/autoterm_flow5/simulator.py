@@ -10,7 +10,7 @@ from .protocol import (
     DEV_EXTENDED,
     DEV_HEATER,
     DEV_PANEL,
-    TYPE_DIAGNOSTIC,
+    TYPE_DIAGNOSTIC_MODE,
     TYPE_EXTENDED,
     TYPE_STATUS,
     Framer,
@@ -36,11 +36,15 @@ class SimulatedHeater:
         for frame in Framer().feed(data):
             if not frame.crc_ok:
                 continue
-            if frame.dev == DEV_EXTENDED and frame.msg_type == TYPE_DIAGNOSTIC and frame.length == 0:
+            if frame.dev != DEV_PANEL:
+                continue
+            if frame.msg_type == TYPE_DIAGNOSTIC_MODE and frame.payload[:1] == b"\x01":
                 self.extended_enabled = True
                 self.events.append("diagnostic")
                 continue
-            if frame.dev != DEV_PANEL:
+            if frame.msg_type == TYPE_DIAGNOSTIC_MODE:
+                self.extended_enabled = False
+                self.events.append("diagnostic-off")
                 continue
             if frame.msg_type == TYPE_STATUS:
                 self.events.append("status")
