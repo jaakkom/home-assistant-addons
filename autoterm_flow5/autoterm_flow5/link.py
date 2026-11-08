@@ -14,6 +14,9 @@ from .protocol import (
 )
 
 HANDSHAKE_INTERVAL_S = 60.0
+# Until a 58-byte frame has arrived, repeat the handshake sooner. A miss on
+# the first try must not wait a full minute.
+HANDSHAKE_RETRY_S = 5.0
 LINK_TIMEOUT_S = 15.0
 # Keep listening after a request. One 0.3 s read misses a slow reply, and the
 # next request then collides with it.
@@ -35,6 +38,9 @@ class SerialLink:
         self.last_extended_at: float | None = None
         self.last_frame_at: float | None = None
         self.last_handshake_at: float | None = None
+        self.rx_bytes = 0
+        self.bad_crc = 0
+        self.other_frames: list[str] = []
         self._empty_reads = 0
 
     def close(self) -> None:
@@ -48,19 +54,30 @@ class SerialLink:
             return
 
     def poll(self, now: float, commands: list[bytes] | None = None) -> None:
-        payload = bytearray(status_request())
+        """Ask for status. The diagnostic handshake goes out on its own first.
+
+        Gluing it to the status request makes the heater answer neither: it
+        starts replying while the extra bytes are still being sent.
+        """
+        self.rx_bytes = 0
+        self.other_frames = []
+        bad_before = self.framer.bad_crc
         if self._needs_handshake(now):
-            payload.extend(PUBR0)
+            self.port.write(PUBR0)
             self.last_handshake_at = now
+            self._ingest(now)
+        payload = bytearray(status_request())
         for command in commands or []:
             payload.extend(command)
         self.port.write(payload)
         self._ingest(now)
+        self.bad_crc = self.framer.bad_crc - bad_before
 
     def _needs_handshake(self, now: float) -> bool:
         if not self.extended_telemetry:
             return False
-        if self.last_handshake_at is not None and now - self.last_handshake_at < HANDSHAKE_INTERVAL_S:
+        interval = HANDSHAKE_INTERVAL_S if self.last_extended_at is not None else HANDSHAKE_RETRY_S
+        if self.last_handshake_at is not None and now - self.last_handshake_at < interval:
             return False
         if self.last_extended_at is None:
             return True
@@ -86,6 +103,7 @@ class SerialLink:
             else:
                 quiet = 0
                 self._empty_reads = 0
+                self.rx_bytes += len(data)
                 self._consume(now, data)
                 if self.last_status_at == now and not self._waiting_for_extended(now):
                     return
@@ -111,6 +129,7 @@ class SerialLink:
             if parsed is None:
                 if frame.crc_ok:
                     self.last_frame_at = now
+                    self.other_frames.append(f"{frame.dev:02x}/{frame.msg_type:02x}/{frame.length}")
                 continue
             self.last_frame_at = now
             if isinstance(parsed, StatusFrame):
@@ -230,13 +249,24 @@ class TelemetryLog:
         self._missing = True
         if link.last_extended_at is None:
             if link.last_handshake_at == now:
-                lines.append(("warning", "requesting 58-byte telemetry, no frame yet"))
+                text = "requesting 58-byte telemetry, no frame yet"
             else:
-                lines.append(("warning", "58-byte telemetry has not arrived"))
-            return lines
-        age = now - link.last_extended_at
-        lines.append(("warning", f"58-byte telemetry stopped, last frame {age:.0f} s ago"))
+                text = "58-byte telemetry has not arrived"
+        else:
+            age = now - link.last_extended_at
+            text = f"58-byte telemetry stopped, last frame {age:.0f} s ago"
+        lines.append(("warning", f"{text}, {_heard(link)}"))
         return lines
+
+
+def _heard(link: SerialLink) -> str:
+    """What arrived besides a parsed 58-byte frame."""
+    parts = [f"heard {link.rx_bytes} bytes"]
+    if link.bad_crc:
+        parts.append(f"bad crc {link.bad_crc}")
+    if link.other_frames:
+        parts.append("other " + " ".join(link.other_frames[:4]))
+    return ", ".join(parts)
 
 
 def _read_port(port: BinaryIO) -> bytes | None:
