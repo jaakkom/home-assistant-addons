@@ -16,7 +16,7 @@ Flow 5 / BINAR-5S uses 2400 baud, 8N1, 5 V TTL. A 3.3 V adapter usually gets no 
 
 Do not connect the red +12 V wire. It powers the panel and is not serial data.
 
-Leave the physical panel disconnected. Two masters on the same connector collide, and the panel can lose communication.
+Leave the physical panel disconnected. Two masters on the same connector collide, and the panel can lose communication. The add-on opens the serial port exclusively. A read that comes back empty does not by itself close the port. If the adapter keeps failing, the port is closed and opened again after five seconds.
 
 The official Mosquitto broker is required so entities appear through MQTT discovery. Leave the MQTT fields empty. The add-on then reads the host, port, username, and password from the Supervisor. Mosquitto 6.5 does not register that service, and the log says `Service not enabled`. Update Mosquitto broker to 7.1 or newer, then restart this add-on. Temperature entities are read from the Home Assistant API. Enter them as a comma-separated list, for example `sensor.living_room,sensor.bedroom`.
 

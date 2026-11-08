@@ -18,7 +18,42 @@ class FakePort:
         return data
 
 
+class EmptyPort(FakePort):
+    def __init__(self) -> None:
+        super().__init__()
+        self.reads = 0
+        self.closed = False
+
+    def read(self, _size: int) -> bytes:
+        self.reads += 1
+        raise OSError(
+            "device reports readiness to read but returned no data "
+            "(device disconnected or multiple access on port?)"
+        )
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class LinkTests(unittest.TestCase):
+    def test_one_empty_read_does_not_drop_the_poll(self):
+        port = EmptyPort()
+        link = SerialLink(port, extended_telemetry=False)
+        link.poll(0)
+        link.poll(1)
+        self.assertEqual(port.reads, 2)
+        self.assertIsNone(link.last_status_at)
+
+    def test_repeated_empty_reads_ask_for_a_reopen(self):
+        port = EmptyPort()
+        link = SerialLink(port, extended_telemetry=False)
+        link.poll(0)
+        link.poll(1)
+        with self.assertRaises(ConnectionError):
+            link.poll(2)
+        link.close()
+        self.assertTrue(port.closed)
+
     def test_poll_requests_status_and_handshake_once(self):
         port = FakePort()
         link = SerialLink(port, extended_telemetry=True)
