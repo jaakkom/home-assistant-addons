@@ -15,6 +15,9 @@ from .protocol import (
 
 HANDSHAKE_INTERVAL_S = 60.0
 LINK_TIMEOUT_S = 5.0
+# pyserial raises this when select says the port is readable and read
+# returns nothing. One such result is an empty poll, not a lost adapter.
+_EMPTY_READ = "returned no data"
 
 
 class SerialLink:
@@ -28,6 +31,17 @@ class SerialLink:
         self.last_extended_at: float | None = None
         self.last_frame_at: float | None = None
         self.last_handshake_at: float | None = None
+        self._empty_reads = 0
+
+    def close(self) -> None:
+        """Release the port before another open. A second handle makes reads fail."""
+        closer = getattr(self.port, "close", None)
+        if closer is None:
+            return
+        try:
+            closer()
+        except Exception:
+            return
 
     def poll(self, now: float, commands: list[bytes] | None = None) -> None:
         payload = bytearray(status_request())
@@ -49,7 +63,13 @@ class SerialLink:
         return now - self.last_extended_at >= HANDSHAKE_INTERVAL_S
 
     def _ingest(self, now: float) -> None:
-        data = self.port.read(1024) or b""
+        data = _read_port(self.port)
+        if data is None:
+            self._empty_reads += 1
+            if self._empty_reads >= 3:
+                raise ConnectionError("serial port returned no data")
+            return
+        self._empty_reads = 0
         if not data:
             return
         for frame in self.framer.feed(data):
@@ -87,4 +107,15 @@ def open_port(path: str, baud: int):
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,
         timeout=0.3,
+        exclusive=True,
     )
+
+
+def _read_port(port: BinaryIO) -> bytes | None:
+    """Return bytes, empty bytes on timeout, or None for one spurious empty read."""
+    try:
+        return port.read(1024) or b""
+    except Exception as exc:
+        if _EMPTY_READ in str(exc).lower():
+            return None
+        raise

@@ -24,6 +24,7 @@ SETTINGS_PATH = Path(os.environ.get("SETTINGS_PATH", "/data/settings.json"))
 FUEL_PATH = Path(os.environ.get("FUEL_PATH", "/data/fuel.json"))
 HA_API = os.environ.get("HA_API_URL", "http://supervisor/core/api")
 POLL_S = 1.0
+REOPEN_S = 5.0
 
 
 def load_options() -> dict:
@@ -111,14 +112,15 @@ def run() -> None:
                 except Exception as exc:  # serial port missing or busy
                     LOG.warning("Could not open the serial port: %s", exc)
                     _publish_offline(client, controller, fuel, settings, last_room)
-                    time.sleep(POLL_S)
+                    time.sleep(REOPEN_S)
                     continue
             link.extended_telemetry = settings.extended_telemetry
             try:
                 result = step(now, link, controller, settings, fuel, faults, link_notice, last_room, age)
             except Exception as exc:
                 LOG.warning("Heater communication failed: %s", exc)
-                if not settings.simulate:
+                if not settings.simulate and link is not None:
+                    link.close()
                     link = None
                 notice = link_notice.update(False)
                 if notice:
@@ -127,7 +129,7 @@ def run() -> None:
                         f"{PREFIX}/event/link",
                         json.dumps({"online": False, "message": notice.message}),
                     )
-                time.sleep(POLL_S)
+                time.sleep(REOPEN_S)
                 continue
             for notice in result.notices:
                 deliver_notice(notice, token, HA_API)
@@ -150,6 +152,8 @@ def run() -> None:
                 )
             time.sleep(max(0.0, POLL_S - (time.monotonic() - started)))
     finally:
+        if link is not None:
+            link.close()
         client.publish(f"{PREFIX}/availability", "offline", retain=True)
         client.loop_stop()
         client.disconnect()
