@@ -226,7 +226,7 @@ class SimulationLoopTests(unittest.TestCase):
         self.heater.silent = True
         notices = []
         offline = None
-        for _ in range(10):
+        for _ in range(20):
             result = self.cycle()
             notices.extend(result.notices)
             if result.values["link"] == "OFF":

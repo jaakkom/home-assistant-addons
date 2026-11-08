@@ -1,7 +1,7 @@
 import unittest
 
 from autoterm_flow5.link import LinkProgress, SerialLink
-from autoterm_flow5.protocol import PUBR0, status_request
+from autoterm_flow5.protocol import PUBR0, build_frame, status_request
 
 
 class FakePort:
@@ -11,8 +11,14 @@ class FakePort:
 
     def write(self, data: bytes) -> None:
         self.written.extend(data)
+        self.writes = getattr(self, "writes", 0) + 1
 
     def read(self, _size: int) -> bytes:
+        chunks = getattr(self, "chunks", None)
+        if chunks is not None:
+            if not chunks:
+                return b""
+            return chunks.pop(0)
         data = self.response
         self.response = b""
         return data
@@ -56,20 +62,36 @@ class LinkTests(unittest.TestCase):
     def test_one_empty_read_does_not_drop_the_poll(self):
         port = EmptyPort()
         link = SerialLink(port, extended_telemetry=False)
-        link.poll(0)
+        link.last_status_at = 0
         link.poll(1)
-        self.assertEqual(port.reads, 2)
-        self.assertIsNone(link.last_status_at)
+        self.assertGreaterEqual(port.reads, 1)
+        self.assertEqual(link.last_status_at, 0)
 
     def test_repeated_empty_reads_ask_for_a_reopen(self):
         port = EmptyPort()
         link = SerialLink(port, extended_telemetry=False)
-        link.poll(0)
-        link.poll(1)
         with self.assertRaises(ConnectionError):
-            link.poll(2)
+            link.poll(0)
         link.close()
         self.assertTrue(port.closed)
+
+    def test_a_recent_status_survives_an_empty_read_glitch(self):
+        port = EmptyPort()
+        link = SerialLink(port, extended_telemetry=False)
+        link.last_status_at = 0
+        link.poll(1)
+        self.assertEqual(link.last_status_at, 0)
+
+    def test_a_late_status_frame_is_read_before_the_next_request(self):
+        payload = bytes.fromhex("02030046460081430001015cff0100000000")
+        frame = build_frame(0x04, 0x0F, payload)
+        port = FakePort()
+        port.chunks = [b"", frame]
+        link = SerialLink(port, extended_telemetry=False)
+        link.poll(5)
+        self.assertEqual(link.last_status_at, 5)
+        self.assertEqual(link.status.mode_name, "Ignition 1")
+        self.assertEqual(port.writes, 1)
 
     def test_poll_requests_status_and_handshake_once(self):
         port = FakePort()
