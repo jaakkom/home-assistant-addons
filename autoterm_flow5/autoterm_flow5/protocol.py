@@ -179,6 +179,11 @@ class Framer:
         self.resyncs = 0
         self.bad_crc = 0
 
+    @property
+    def pending(self) -> int:
+        """Bytes of a frame that has not been completed yet."""
+        return len(self._buf)
+
     def feed(self, data: bytes) -> list[Frame]:
         self._buf.extend(data)
         frames: list[Frame] = []

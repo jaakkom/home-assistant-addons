@@ -114,6 +114,34 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(link.extended.voltage, 12.5)
         self.assertEqual(port.writes, 1)
 
+    def test_an_incoming_frame_is_finished_before_the_status_request(self):
+        raw = bytearray(58)
+        raw[22], raw[23] = 0, 125
+        frame = build_frame(0x02, 0x01, bytes(raw))
+        port = FakePort()
+        port.chunks = [frame[:20], frame[20:], b""]
+        port.order: list[str] = []
+        write = port.write
+        read = port.read
+
+        def record_write(data: bytes) -> None:
+            port.order.append("w")
+            write(data)
+
+        def record_read(size: int) -> bytes:
+            port.order.append("r")
+            return read(size)
+
+        port.write = record_write
+        port.read = record_read
+        link = SerialLink(port, extended_telemetry=True)
+        link.last_handshake_at = 0
+        link.last_extended_at = 1
+        link.poll(10)
+        self.assertEqual(link.extended.voltage, 12.5)
+        self.assertLess(port.order.index("r"), port.order.index("w"))
+        self.assertTrue(bytes(port.written).startswith(status_request()))
+
     def test_poll_requests_status_and_handshake_once(self):
         port = FakePort()
         link = SerialLink(port, extended_telemetry=True)
