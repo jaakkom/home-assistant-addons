@@ -8,6 +8,8 @@ from pathlib import Path
 # TH-11 / assy 4995: 4.4 ml per 100 strokes.
 DEFAULT_DOSE_ML = 0.044
 MAX_GAP_S = 5.0
+HOUR_S = 3600.0
+BUCKET_S = 60.0
 
 
 def liters_per_hour(frequency_hz: float, dose_ml: float = DEFAULT_DOSE_ML) -> float:
@@ -26,6 +28,8 @@ class FuelMeter:
     The frequency applied to an interval is the frequency reported at the
     start of that interval. A gap longer than five seconds adds nothing.
     The tank level stays unknown until a fill or a manual level is stored.
+    Remaining time uses the average consumption over the observed seconds
+    of the last hour. Idle time in that hour lowers the average.
     """
 
     def __init__(self, path: Path | None = None, dose_ml: float = DEFAULT_DOSE_ML) -> None:
@@ -33,7 +37,9 @@ class FuelMeter:
         self.dose_ml = dose_ml
         self.total_ml = 0.0
         self.remaining_ml: float | None = None
-        self.last_burn_lph = 0.0
+        self.pending_save = False
+        self._buckets: list[list[float]] = []
+        self._hour_end: float | None = None
         self._last_time: float | None = None
         self._last_hz = 0.0
         if path is not None and path.exists():
@@ -42,11 +48,14 @@ class FuelMeter:
                 self.total_ml = float(data.get("total_ml", 0.0))
                 if data.get("remaining_ml") is not None:
                     self.remaining_ml = float(data["remaining_ml"])
-                self.last_burn_lph = float(data.get("last_burn_lph", 0.0))
+                self._buckets = _load_buckets(data.get("hour_buckets", []))
+                if data.get("hour_end") is not None:
+                    self._hour_end = float(data["hour_end"])
             except (OSError, ValueError, TypeError):
                 self.total_ml = 0.0
                 self.remaining_ml = None
-                self.last_burn_lph = 0.0
+                self._buckets = []
+                self._hour_end = None
 
     @property
     def total_liters(self) -> float:
@@ -63,11 +72,29 @@ class FuelMeter:
             return None
         return min(100.0, max(0.0, self.remaining_ml / (capacity_l * 1000) * 100))
 
+    def average_lph(self) -> float:
+        """Litres per hour over the observed seconds of the last hour."""
+        now = self._last_time if self._last_time is not None else self._hour_end
+        if now is None:
+            return 0.0
+        cutoff = now - HOUR_S
+        milliliters = 0.0
+        seconds = 0.0
+        for start, span, amount in self._buckets:
+            if start < cutoff:
+                continue
+            milliliters += amount
+            seconds += span
+        if seconds <= 0 or milliliters <= 0:
+            return 0.0
+        return (milliliters / 1000) * (HOUR_S / seconds)
+
     def hours_remaining(self) -> float | None:
-        """Hours left at the latest non-zero burn rate."""
-        if self.remaining_ml is None or self.last_burn_lph <= 0:
+        """Hours left at the last hour's average consumption."""
+        rate = self.average_lph()
+        if self.remaining_ml is None or rate <= 0:
             return None
-        return (self.remaining_ml / 1000) / self.last_burn_lph
+        return (self.remaining_ml / 1000) / rate
 
     def refuel(self, capacity_l: float) -> bool:
         """Mark the tank full. The lifetime total is left unchanged."""
@@ -98,16 +125,32 @@ class FuelMeter:
         added = 0.0
         if self._last_time is not None:
             dt = now - self._last_time
-            if 0 < dt <= MAX_GAP_S and self._last_hz > 0 and dose > 0:
-                added = self._last_hz * dose * dt
-                self.total_ml += added
-                if self.remaining_ml is not None:
-                    self.remaining_ml = max(0.0, self.remaining_ml - added)
+            if 0 < dt <= MAX_GAP_S:
+                if self._last_hz > 0 and dose > 0:
+                    added = self._last_hz * dose * dt
+                    self.total_ml += added
+                    if self.remaining_ml is not None:
+                        self.remaining_ml = max(0.0, self.remaining_ml - added)
+                self._record(now, dt, added)
+                self._hour_end = now
         self._last_time = now
         self._last_hz = max(0.0, frequency_hz)
-        if self._last_hz > 0 and dose > 0:
-            self.last_burn_lph = liters_per_hour(self._last_hz, dose)
         return added
+
+    def _record(self, end: float, dt: float, milliliters: float) -> None:
+        start = float(int(end // BUCKET_S) * int(BUCKET_S))
+        if not self._buckets or self._buckets[-1][0] != start:
+            self._buckets.append([start, 0.0, 0.0])
+            self.pending_save = True
+        bucket = self._buckets[-1]
+        bucket[1] += dt
+        bucket[2] += milliliters
+        if milliliters > 0:
+            self.pending_save = True
+        cutoff = end - HOUR_S
+        if self._buckets[0][0] < cutoff:
+            self._buckets = [item for item in self._buckets if item[0] >= cutoff]
+            self.pending_save = True
 
     def reset(self) -> None:
         self.total_ml = 0.0
@@ -122,8 +165,24 @@ class FuelMeter:
                 {
                     "total_ml": self.total_ml,
                     "remaining_ml": self.remaining_ml,
-                    "last_burn_lph": self.last_burn_lph,
+                    "hour_buckets": self._buckets,
+                    "hour_end": self._hour_end,
                 }
             ),
             encoding="utf-8",
         )
+        self.pending_save = False
+
+
+def _load_buckets(raw: object) -> list[list[float]]:
+    if not isinstance(raw, list):
+        return []
+    buckets: list[list[float]] = []
+    for item in raw:
+        if not isinstance(item, list) or len(item) != 3:
+            continue
+        try:
+            buckets.append([float(item[0]), float(item[1]), float(item[2])])
+        except (TypeError, ValueError):
+            continue
+    return buckets

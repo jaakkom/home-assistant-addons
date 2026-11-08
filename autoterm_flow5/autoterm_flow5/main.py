@@ -187,7 +187,8 @@ def step(
     output = controller.tick(now, link.status, link.extended, room_c, room_age_s)
     link.poll(now, output.commands)
     frequency = link.extended.pump_hz if link.extended is not None else 0.0
-    if fuel.update(now, frequency, settings.pump_dose_ml) > 0:
+    fuel.update(now, frequency, settings.pump_dose_ml)
+    if fuel.pending_save:
         fuel.save()
     online = link.online(now)
     notices: list[Notice] = []

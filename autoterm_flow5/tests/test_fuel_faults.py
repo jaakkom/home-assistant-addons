@@ -46,10 +46,11 @@ class FuelTests(unittest.TestCase):
         self.assertEqual(meter.remaining_ml, 10000)
         self.assertEqual(meter.level_percent(10), 100)
         meter.update(0, 2.0, 0.044)
-        self.assertAlmostEqual(meter.hours_remaining(), 10 / liters_per_hour(2, 0.044), places=4)
+        self.assertIsNone(meter.hours_remaining())
         meter.update(2, 0.0, 0.044)
         self.assertAlmostEqual(meter.remaining_ml, 10000 - 0.176, places=6)
         self.assertAlmostEqual(meter.level_percent(10), 99.99824, places=4)
+        self.assertAlmostEqual(meter.average_lph(), liters_per_hour(2, 0.044), places=4)
         self.assertAlmostEqual(meter.hours_remaining(), meter.remaining_liters / liters_per_hour(2, 0.044), places=4)
 
     def test_gap_does_not_reduce_the_tank(self):
@@ -80,7 +81,22 @@ class FuelTests(unittest.TestCase):
             restored = FuelMeter(path)
             self.assertEqual(restored.total_ml, 0)
             self.assertAlmostEqual(restored.remaining_ml, 10000 - 0.176, places=6)
-            self.assertAlmostEqual(restored.last_burn_lph, liters_per_hour(2, 0.044), places=6)
+            self.assertAlmostEqual(restored.average_lph(), liters_per_hour(2, 0.044), places=4)
+
+    def test_hour_average_includes_idle_and_drops_old_use(self):
+        meter = FuelMeter()
+        meter.refuel(10)
+        meter.update(0, 2.0, 0.044)
+        meter.update(4, 0.0, 0.044)
+        burn = liters_per_hour(2, 0.044)
+        self.assertAlmostEqual(meter.average_lph(), burn, places=4)
+        meter.update(8, 0.0, 0.044)
+        self.assertAlmostEqual(meter.average_lph(), burn / 2, places=4)
+        self.assertAlmostEqual(meter.hours_remaining(), meter.remaining_liters / (burn / 2), places=4)
+        meter.update(3604, 0.0, 0.044)
+        meter.update(3608, 0.0, 0.044)
+        self.assertEqual(meter.average_lph(), 0.0)
+        self.assertIsNone(meter.hours_remaining())
 
     def test_old_fuel_file_has_no_level(self):
         with tempfile.TemporaryDirectory() as directory:

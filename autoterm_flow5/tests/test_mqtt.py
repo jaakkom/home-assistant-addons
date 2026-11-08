@@ -20,6 +20,7 @@ class MqttTests(unittest.TestCase):
         self.assertIn("Fuel consumption", names)
         self.assertIn("Coolant limit", names)
         self.assertIn("Fuel total", names)
+        self.assertIn("Fuel hour average", names)
         self.assertIn("Fuel level", names)
         self.assertIn("Fuel time remaining", names)
         self.assertIn("Tank filled", names)
