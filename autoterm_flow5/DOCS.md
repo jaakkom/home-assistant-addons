@@ -36,7 +36,7 @@ If the heater returns to idle while heating is still on, and the status frame ha
 
 There is no power-level command. Low, middle, and high are the heater's own stages and are published as sensors.
 
-Every setting is a Home Assistant number, switch, or select. Changes are stored in `/data/settings.json` and survive a restart. The add-on option page supplies only the initial values. Delete that file to start again from the option page.
+Every setting is a Home Assistant number, switch, or select. Changes are stored in `/data/settings.json` and survive a restart. The add-on option page supplies the initial values. Delete that file to start again from the option page. The simulation switch is the exception: it is read from the configuration page on every start, because that page is the only place it can be changed.
 
 The option page is grouped. Simulation and the device link come first, then temperature control, run times, coolant and voltage, fuel, and MQTT. Home Assistant 2025.10 or newer shows the groups. An older flat options file is still accepted.
 

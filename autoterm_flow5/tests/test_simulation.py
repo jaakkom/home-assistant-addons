@@ -1,6 +1,8 @@
 """Run the real control loop against the in-process heater."""
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from autoterm_flow5.controller import Controller
@@ -9,7 +11,7 @@ from autoterm_flow5.fuel import FuelMeter
 from autoterm_flow5.link import SerialLink
 from autoterm_flow5.main import _room, open_link, step
 from autoterm_flow5.mqtt_bridge import PREFIX, apply_command, discovery_messages
-from autoterm_flow5.settings import Settings, settings_from_options
+from autoterm_flow5.settings import Settings, load_settings, settings_from_options
 from autoterm_flow5.simulator import SimulatedHeater
 
 
@@ -50,6 +52,29 @@ class OpenLinkTests(unittest.TestCase):
         self.assertEqual(settings.room_target, 19)
         self.assertEqual(settings.aggregation, "avg")
         self.assertEqual(settings.coolant_limit, 80)
+
+    def test_configuration_page_turns_saved_simulation_off(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            Settings(simulate=True, room_target=22).save(path)
+            loaded = load_settings(path, {"simulation": {"simulate": False}})
+            self.assertFalse(loaded.simulate)
+            self.assertEqual(loaded.room_target, 22)
+            loaded.save(path)
+            self.assertFalse(Settings.load(path).simulate)
+
+    def test_configuration_page_turns_saved_simulation_on(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            Settings(simulate=False).save(path)
+            loaded = load_settings(path, {"simulate": "true"})
+            self.assertTrue(loaded.simulate)
+
+    def test_missing_simulation_option_keeps_the_saved_flag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            Settings(simulate=True).save(path)
+            self.assertTrue(load_settings(path, {}).simulate)
 
     def test_simulated_room_is_used_when_no_entities_are_set(self):
         settings = Settings(simulate=True, simulate_room_c=16, temperature_entities="")
