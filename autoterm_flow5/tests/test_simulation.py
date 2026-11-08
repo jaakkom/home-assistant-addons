@@ -70,6 +70,14 @@ class OpenLinkTests(unittest.TestCase):
             loaded = load_settings(path, {"simulate": "true"})
             self.assertTrue(loaded.simulate)
 
+    def test_configuration_page_turns_saved_debug_off(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            Settings(debug=True, room_target=22).save(path)
+            loaded = load_settings(path, {"device": {"debug": False}})
+            self.assertFalse(loaded.debug)
+            self.assertEqual(loaded.room_target, 22)
+
     def test_missing_simulation_option_keeps_the_saved_flag(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"

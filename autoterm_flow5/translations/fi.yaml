@@ -25,6 +25,9 @@ configuration:
       extended_telemetry:
         name: Laajennettu telemetria
         description: Pyydä 58 tavun diagnostiikkakehys, josta saadaan pumpun taajuus ja jännite.
+      debug:
+        name: Debug-loki
+        description: Kirjaa lisäosan lokiin, saapuuko 58 tavun telemetriakehys. Ei muuta lämmittimen ohjausta. Sama kytkin Home Assistantissa vaikuttaa heti.
   temperature:
     name: Lämpötilan ohjaus
     description: Home Assistantin anturit ja termostaatin alkuarvot.

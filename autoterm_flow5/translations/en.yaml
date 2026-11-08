@@ -25,6 +25,9 @@ configuration:
       extended_telemetry:
         name: Extended telemetry
         description: Request the 58-byte diagnostic frame used for pump frequency and voltage.
+      debug:
+        name: Debug log
+        description: Write to the add-on log whether the 58-byte telemetry frame arrives. This does not change heater control. The same switch in Home Assistant takes effect immediately.
   temperature:
     name: Temperature control
     description: Home Assistant sensors and the first thermostat values.

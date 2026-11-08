@@ -246,6 +246,18 @@ def discovery_messages() -> list[tuple[str, str]]:
         "device": DEVICE,
         "entity_category": "config",
     })))
+    messages.append((f"homeassistant/switch/{PREFIX}/debug/config", json.dumps({
+        "name": "Debug log",
+        "unique_id": f"{PREFIX}_debug",
+        "command_topic": set_topic("debug"),
+        "state_topic": state_topic("debug"),
+        "payload_on": "ON",
+        "payload_off": "OFF",
+        "icon": "mdi:bug",
+        "entity_category": "config",
+        "availability_topic": f"{PREFIX}/availability",
+        "device": DEVICE,
+    })))
     messages.append((f"homeassistant/switch/{PREFIX}/circulation/config", json.dumps({
         "name": "Circulation pump while waiting",
         "unique_id": f"{PREFIX}_circulation",
@@ -367,6 +379,7 @@ def collect_state(
         "simulate_room": settings.simulate_room_c,
         "simulate_fault": settings.simulate_fault,
         "simulation": "ON" if settings.simulate else "OFF",
+        "debug": "ON" if settings.debug else "OFF",
     }
     if status is not None:
         for index, value in status.unmapped.items():
@@ -417,6 +430,8 @@ def apply_command(
         settings.aggregation = text
     elif key == "circulation":
         settings.circulation_pump = text == "ON"
+    elif key == "debug":
+        settings.debug = text == "ON"
     else:
         try:
             _apply_number(settings, key, text)

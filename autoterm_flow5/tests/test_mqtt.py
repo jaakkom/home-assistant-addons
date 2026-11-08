@@ -24,6 +24,7 @@ class MqttTests(unittest.TestCase):
         self.assertIn("Fuel level", names)
         self.assertIn("Fuel time remaining", names)
         self.assertIn("Tank filled", names)
+        self.assertIn("Debug log", names)
         diagnostic = [item for item in decoded if item.get("entity_category") == "diagnostic"]
         self.assertTrue(any(item.get("name", "").startswith("Status byte") for item in diagnostic))
         self.assertTrue(any(item.get("name", "").startswith("Extended byte") for item in diagnostic))
@@ -31,6 +32,10 @@ class MqttTests(unittest.TestCase):
     def test_coolant_limit_command_is_clamped_and_kept(self):
         settings = Settings()
         controller = Controller(settings)
+        apply_command(controller, settings, "autoterm_flow5/set/debug", "ON", 0)
+        self.assertTrue(settings.debug)
+        apply_command(controller, settings, "autoterm_flow5/set/debug", "OFF", 1)
+        self.assertFalse(settings.debug)
         apply_command(controller, settings, "autoterm_flow5/set/coolant_limit", "70", 0)
         self.assertEqual(settings.coolant_limit, 70)
         self.assertEqual(controller.settings.coolant_limit, 70)
