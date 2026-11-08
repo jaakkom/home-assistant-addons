@@ -14,7 +14,11 @@ from .protocol import (
 )
 
 HANDSHAKE_INTERVAL_S = 60.0
-LINK_TIMEOUT_S = 5.0
+LINK_TIMEOUT_S = 15.0
+# Keep listening after a request. One 0.3 s read misses a slow reply, and the
+# next request then collides with it.
+REPLY_READS = 4
+STATUS_GAP_S = 30.0
 # pyserial raises this when select says the port is readable and read
 # returns nothing. One such result is an empty poll, not a lost adapter.
 _EMPTY_READ = "returned no data"
@@ -63,15 +67,30 @@ class SerialLink:
         return now - self.last_extended_at >= HANDSHAKE_INTERVAL_S
 
     def _ingest(self, now: float) -> None:
-        data = _read_port(self.port)
-        if data is None:
-            self._empty_reads += 1
-            if self._empty_reads >= 3:
-                raise ConnectionError("serial port returned no data")
-            return
-        self._empty_reads = 0
-        if not data:
-            return
+        """Read until a status frame arrives or the reply window goes quiet."""
+        quiet = 0
+        for _ in range(REPLY_READS):
+            data = _read_port(self.port)
+            if data is None:
+                self._empty_reads += 1
+                if self._empty_reads >= 3 and not self._status_is_recent(now):
+                    raise ConnectionError("serial port returned no data")
+                continue
+            elif not data:
+                quiet += 1
+            else:
+                quiet = 0
+                self._empty_reads = 0
+                if self._consume(now, data):
+                    return
+            if quiet >= 3:
+                return
+
+    def _status_is_recent(self, now: float) -> bool:
+        return self.last_status_at is not None and now - self.last_status_at <= STATUS_GAP_S
+
+    def _consume(self, now: float, data: bytes) -> bool:
+        found_status = False
         for frame in self.framer.feed(data):
             parsed = classify(frame)
             if parsed is None:
@@ -82,9 +101,11 @@ class SerialLink:
             if isinstance(parsed, StatusFrame):
                 self.status = parsed
                 self.last_status_at = now
+                found_status = True
             elif isinstance(parsed, ExtendedFrame):
                 self.extended = parsed
                 self.last_extended_at = now
+        return found_status
 
     def online(self, now: float) -> bool:
         return self.last_status_at is not None and now - self.last_status_at <= LINK_TIMEOUT_S

@@ -1,3 +1,3 @@
 """Autoterm Flow 5 heater control for Home Assistant."""
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
