@@ -94,6 +94,29 @@ def option_value(options: dict, section: str, name: str, default=None):
     return default
 
 
+def option_is_set(options: dict, section: str, name: str) -> bool:
+    """True when the add-on configuration actually contains this option."""
+    group = options.get(section)
+    if isinstance(group, dict) and name in group and group[name] is not None:
+        return True
+    value = options.get(name)
+    return name in options and value is not None and not isinstance(value, (dict, list))
+
+
+def load_settings(path: Path, options: dict) -> Settings:
+    """Load saved settings, then apply the simulation switch from the add-on page.
+
+    The other values stay in settings.json after the first start. Simulation is
+    changed only on the configuration page, so a previously saved true must not
+    keep the UART closed after the option is turned off.
+    """
+    settings = Settings.load(path, settings_from_options(options))
+    if option_is_set(options, "simulation", "simulate"):
+        settings.simulate = settings_from_options(options).simulate
+        settings = settings.sanitized()
+    return settings
+
+
 def settings_from_options(options: dict) -> Settings:
     def num(section: str, name: str, default: float) -> float:
         try:

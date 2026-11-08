@@ -15,7 +15,7 @@ from .fuel import FuelMeter, liters_per_hour
 from .ha import deliver_notice, read_temperature, supervisor_token
 from .link import SerialLink, open_port
 from .mqtt_bridge import PREFIX, apply_command, collect_state, discovery_messages, state_topic
-from .settings import Settings, option_value, settings_from_options
+from .settings import Settings, load_settings, option_value
 from .simulator import SimulatedHeater
 
 LOG = logging.getLogger("autoterm_flow5")
@@ -47,7 +47,7 @@ def mqtt_config(options: dict) -> tuple[str, int, str, str]:
 def run() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     options = load_options()
-    settings = Settings.load(SETTINGS_PATH, settings_from_options(options))
+    settings = load_settings(SETTINGS_PATH, options)
     settings.save(SETTINGS_PATH)
     controller = Controller(settings)
     fuel = FuelMeter(FUEL_PATH, settings.pump_dose_ml)
