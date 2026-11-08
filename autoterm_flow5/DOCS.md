@@ -42,7 +42,9 @@ The option page is grouped. Simulation and the device link come first, then temp
 
 ## Fuel
 
-Pump frequency comes from the extended 58-byte frame. The 12 V TH-11 pump (assy 4995) meters 0.044 ml per stroke. Instantaneous consumption is `L/h = frequency_Hz * dose_ml * 3.6`. The total integrates the time between samples. A gap longer than five seconds adds nothing. The total is stored in `/data/fuel.json` and can be reset with a button. The 24 V pump dose can differ, so the dose is adjustable.
+Pump frequency comes from the extended 58-byte frame. The 12 V TH-11 pump (assy 4995) meters 0.044 ml per stroke. Instantaneous consumption is `L/h = frequency_Hz * dose_ml * 3.6`. The total integrates the time between samples. A gap longer than five seconds adds nothing. The total is stored in `/data/fuel.json` and can be reset with the **Reset fuel total** button. The 24 V pump dose can differ, so the dose is adjustable.
+
+Set **Tank capacity** to the tank size in litres. The level stays unknown until you press **Tank filled** or set **Fuel in tank**. A fill sets the remaining amount to the tank size and leaves the lifetime total unchanged. Consumption after that reduces the remaining amount. **Fuel level** is the remaining share of the tank, in percent, and is the entity to use on a gauge card. **Fuel time remaining** is the remaining litres divided by the latest non-zero burn rate, in hours. It stays unknown until the pump has run once, and it keeps that rate while the heater is idle. A smaller tank capacity caps the stored level.
 
 Extended telemetry is requested with the `PUBR0` handshake. It is on by default. If the 58-byte frame does not arrive, the handshake is sent again about once a minute.
 

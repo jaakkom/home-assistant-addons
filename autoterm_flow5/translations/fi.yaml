@@ -84,11 +84,14 @@ configuration:
         description: Julkaise sisäpuhaltimen pyyntö, kun neste saavuttaa tämän lämpötilan.
   fuel:
     name: Polttoaine
-    description: Pumpun annos, jolla kulutus lasketaan.
+    description: Pumpun annos ja tankin koko, joilla kulutus ja polttoaineen määrä lasketaan.
     fields:
       pump_dose_ml:
         name: Pumpun annos
         description: Millilitraa iskua kohti. 0,044 vastaa 12 V:n TH-11-pumppua.
+      tank_capacity_l:
+        name: Tankin koko
+        description: Polttoainetankin koko litroina. Nolla jättää määrän tuntemattomaksi, kunnes koko on asetettu.
   mqtt:
     name: MQTT
     description: Jätä tyhjäksi, niin käytetään Supervisorin Mosquitto-brokeria.

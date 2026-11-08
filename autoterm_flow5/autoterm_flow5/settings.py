@@ -25,6 +25,7 @@ class Settings:
     shutdown_voltage_s: float = 30.0
     fan_temperature: float = 40.0
     pump_dose_ml: float = 0.044
+    tank_capacity_l: float = 0.0
     preheat_minutes: int = 30
     extended_telemetry: bool = True
     circulation_pump: bool = False
@@ -49,6 +50,7 @@ class Settings:
             shutdown_voltage_s=_clamp(self.shutdown_voltage_s, 1, 600),
             fan_temperature=_clamp(self.fan_temperature, 30, 60),
             pump_dose_ml=_clamp(self.pump_dose_ml, 0.01, 0.2),
+            tank_capacity_l=_clamp(self.tank_capacity_l, 0, 500),
             preheat_minutes=int(_clamp(self.preheat_minutes, 1, 480)),
             extended_telemetry=bool(self.extended_telemetry),
             circulation_pump=bool(self.circulation_pump),
@@ -122,6 +124,7 @@ def settings_from_options(options: dict) -> Settings:
         shutdown_voltage_s=num("protection", "shutdown_voltage_seconds", 30),
         fan_temperature=num("protection", "fan_temperature", 40),
         pump_dose_ml=num("fuel", "pump_dose_ml", 0.044),
+        tank_capacity_l=num("fuel", "tank_capacity_l", 0),
         preheat_minutes=int(num("timing", "preheat_minutes", 30)),
         extended_telemetry=flag("device", "extended_telemetry", True),
         circulation_pump=flag("timing", "circulation_pump", False),

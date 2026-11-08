@@ -84,11 +84,14 @@ configuration:
         description: Publish the interior-fan request when coolant reaches this temperature.
   fuel:
     name: Fuel
-    description: Pump dose used to calculate consumption.
+    description: Pump dose and tank size used to calculate consumption and the fuel level.
     fields:
       pump_dose_ml:
         name: Pump dose
         description: Millilitres per pump stroke. 0.044 matches the 12 V TH-11 pump.
+      tank_capacity_l:
+        name: Tank capacity
+        description: Fuel tank size in litres. Zero leaves the level unknown until this is set.
   mqtt:
     name: MQTT
     description: Leave these empty to use the Mosquitto broker from the Supervisor.

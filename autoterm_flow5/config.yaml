@@ -1,5 +1,5 @@
 name: Autoterm Flow 5
-version: "0.2.2"
+version: "0.3.0"
 slug: autoterm_flow5
 description: >-
   Replaces the Autoterm Flow 5 control panel. Controls and monitors the
@@ -48,6 +48,7 @@ options:
     fan_temperature: 40
   fuel:
     pump_dose_ml: 0.044
+    tank_capacity_l: 0
   mqtt:
     mqtt_host: ""
     mqtt_port: 1883
@@ -82,6 +83,7 @@ schema:
     fan_temperature: float(30,60)
   fuel:
     pump_dose_ml: float(0.01,0.2)
+    tank_capacity_l: float(0,500)
   mqtt:
     mqtt_host: str?
     mqtt_port: port?
