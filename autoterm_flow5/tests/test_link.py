@@ -1,7 +1,7 @@
 import unittest
 
 from autoterm_flow5.link import LinkProgress, SerialLink, TelemetryLog
-from autoterm_flow5.protocol import build_frame, decode_extended, diagnostic_request, status_request
+from autoterm_flow5.protocol import build_frame, decode_extended, diagnostic_enable, status_request
 
 
 class FakePort:
@@ -119,27 +119,27 @@ class LinkTests(unittest.TestCase):
         link = SerialLink(port, extended_telemetry=True)
         link.poll(0)
         written = bytes(port.written)
-        self.assertTrue(written.startswith(diagnostic_request()))
+        self.assertTrue(written.startswith(diagnostic_enable()))
         self.assertIn(status_request(), written)
-        self.assertLess(written.index(diagnostic_request()), written.index(status_request()))
+        self.assertLess(written.index(diagnostic_enable()), written.index(status_request()))
         port.written.clear()
         link.poll(4)
-        self.assertNotIn(diagnostic_request(), bytes(port.written))
+        self.assertNotIn(diagnostic_enable(), bytes(port.written))
         self.assertTrue(bytes(port.written).startswith(status_request()))
         port.written.clear()
         link.poll(5)
-        self.assertIn(diagnostic_request(), bytes(port.written))
+        self.assertIn(diagnostic_enable(), bytes(port.written))
 
-    def test_diagnostic_query_repeats_eight_seconds_after_a_frame(self):
+    def test_diagnostic_mode_stays_off_while_frames_arrive(self):
         port = FakePort()
         link = SerialLink(port, extended_telemetry=True)
         link.last_extended_at = 0
         link.last_handshake_at = 0
-        link.poll(7)
-        self.assertNotIn(diagnostic_request(), bytes(port.written))
-        port.written.clear()
         link.poll(8)
-        self.assertTrue(bytes(port.written).startswith(diagnostic_request()))
+        self.assertNotIn(diagnostic_enable(), bytes(port.written))
+        port.written.clear()
+        link.poll(60)
+        self.assertTrue(bytes(port.written).startswith(diagnostic_enable()))
 
 
 def _extended_frame():
@@ -193,7 +193,7 @@ class TelemetryLogTests(unittest.TestCase):
         link.last_handshake_at = 61
         link.rx_bytes = 25
         third = progress.update(61, True, link)
-        self.assertEqual(third, [("warning", "requesting 58-byte telemetry, no frame yet, heard 25 bytes")])
+        self.assertEqual(third, [("warning", "diagnostic reports requested, no 58-byte frame yet, heard 25 bytes")])
 
     def test_debug_reports_when_a_frame_stops(self):
         link = SerialLink(FakePort(), extended_telemetry=True)

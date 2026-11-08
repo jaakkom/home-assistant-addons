@@ -24,8 +24,10 @@ TYPE_STATUS = 0x0F
 TYPE_CABIN_TEMP = 0x11
 TYPE_PUMP = 0x21
 TYPE_EXTENDED = 0x01
-# Autoterm Test asks for the parameter block with device 0x02 and type 0x00.
+# Empty device-0x02 query. Autoterm Test sends it, and this heater does not answer it.
 TYPE_DIAGNOSTIC = 0x00
+# Panel command that makes the heater start sending the parameter block.
+TYPE_DIAGNOSTIC_MODE = 0x07
 
 HEADER_LEN = 5
 CRC_LEN = 2
@@ -101,15 +103,23 @@ def status_request() -> bytes:
 
 
 def diagnostic_request() -> bytes:
-    """Ask for the 58-byte parameter block.
-
-    Autoterm Test 1.17.3.0 sends this from Timer3 every eight seconds while
-    the port is open. It is device 0x02, type 0x00, and an empty payload.
-    The status request stays on device 0x03 type 0x0F and only returns the
-    18-byte status. This is not the panel start command: that is device
-    0x03 type 0x01.
-    """
+    """Keepalive the official tester writes. This Flow 5 does not answer it."""
     return build_frame(DEV_EXTENDED, TYPE_DIAGNOSTIC)
+
+
+def diagnostic_enable() -> bytes:
+    """Ask the heater to start sending the parameter block on its own.
+
+    Captured from the official diagnostic software and listed in the
+    BINAR-5S profile as command 7, payload 1. After the heater accepts it,
+    it transmits device 0x02 type 0x01 frames without a further request.
+    Payload 0 turns that stream off. This is not the start command.
+    """
+    return build_frame(DEV_PANEL, TYPE_DIAGNOSTIC_MODE, b"\x01")
+
+
+def diagnostic_disable() -> bytes:
+    return build_frame(DEV_PANEL, TYPE_DIAGNOSTIC_MODE, b"\x00")
 
 
 def stop_command() -> bytes:
@@ -296,9 +306,12 @@ def decode_status(payload: bytes) -> StatusFrame | None:
 
 
 def decode_extended(payload: bytes) -> ExtendedFrame | None:
-    if len(payload) < EXTENDED_LEN:
+    # BINAR-5S formulas use bytes 1..56. Air heaters send 72 bytes in the same stream.
+    if len(payload) < 56:
         return None
     raw = payload[:EXTENDED_LEN]
+    if len(raw) < EXTENDED_LEN:
+        raw = raw.ljust(EXTENDED_LEN, b"\x00")
     return ExtendedFrame(
         state=raw[0],
         substate=raw[1],
@@ -333,7 +346,7 @@ def classify(frame: Frame) -> StatusFrame | ExtendedFrame | None:
     if (
         frame.dev == DEV_EXTENDED
         and frame.msg_type in (TYPE_EXTENDED, TYPE_DIAGNOSTIC)
-        and frame.length == EXTENDED_LEN
+        and frame.length >= 56
     ):
         return decode_extended(frame.payload)
     return None
