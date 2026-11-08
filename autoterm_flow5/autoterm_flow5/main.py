@@ -15,6 +15,7 @@ from .fuel import FuelMeter, liters_per_hour
 from .ha import deliver_notice, read_temperature, supervisor_token
 from .link import LinkProgress, SerialLink, TelemetryLog, open_port
 from .mqtt_bridge import PREFIX, apply_command, collect_state, discovery_messages, state_topic
+from .panel import PanelHub, start_panel
 from .settings import Settings, load_settings, option_value
 from .simulator import SimulatedHeater
 
@@ -54,6 +55,8 @@ def run() -> None:
     fuel = FuelMeter(FUEL_PATH, settings.pump_dose_ml)
     if fuel.clamp_to_capacity(settings.tank_capacity_l):
         fuel.save()
+    panel = PanelHub()
+    start_panel(panel, int(os.environ.get("INGRESS_PORT", "8099")))
     faults = ChangeNotifier("autoterm_flow5_fault", "Autoterm Flow 5")
     link_notice = LinkNotifier()
     token = supervisor_token()
@@ -98,17 +101,23 @@ def run() -> None:
     debug_was_on = settings.debug
     last_room: float | None = None
     last_room_at: float | None = None
+
+    def handle_command(topic: str, payload: str, now: float) -> None:
+        action = apply_command(controller, settings, topic, payload, now, fuel)
+        if action == "reset-fuel":
+            fuel.reset()
+        settings.save(SETTINGS_PATH)
+        controller.settings = settings
+
     try:
         while True:
             started = time.monotonic()
             now = time.time()
+            for topic, payload in panel.drain():
+                handle_command(topic, payload, now)
             while pending:
                 topic, payload = pending.pop(0)
-                action = apply_command(controller, settings, topic, payload, now, fuel)
-                if action == "reset-fuel":
-                    fuel.reset()
-                settings.save(SETTINGS_PATH)
-                controller.settings = settings
+                handle_command(topic, payload, now)
             room, last_room, last_room_at = _room(settings, token, now, last_room, last_room_at)
             age = None if last_room_at is None else now - last_room_at
             if link is None:
@@ -119,7 +128,7 @@ def run() -> None:
                         LOG.info("Opened %s @ %s, waiting for a status frame", serial_path, baud)
                 except Exception as exc:  # serial port missing or busy
                     LOG.warning("Could not open the serial port: %s", exc)
-                    _publish_offline(client, controller, fuel, settings, last_room)
+                    _publish_offline(client, controller, fuel, settings, last_room, panel)
                     time.sleep(REOPEN_S)
                     continue
             link.extended_telemetry = settings.extended_telemetry
@@ -165,6 +174,7 @@ def run() -> None:
                     LOG.warning("Debug: %s", text)
                 else:
                     LOG.info("Debug: %s", text)
+            panel.publish(result.values)
             for key, value in result.values.items():
                 client.publish(state_topic(key), value, retain=True)
             if result.frequency_hz:
@@ -281,7 +291,7 @@ def _current_fault(link: SerialLink) -> int:
     return 0
 
 
-def _publish_offline(client, controller, fuel, settings, room) -> None:
+def _publish_offline(client, controller, fuel, settings, room, panel: PanelHub | None = None) -> None:
     values = collect_state(
         None,
         None,
@@ -294,6 +304,8 @@ def _publish_offline(client, controller, fuel, settings, room) -> None:
         fan_on=False,
         frequency_hz=0,
     )
+    if panel is not None:
+        panel.publish(values)
     for key, value in values.items():
         client.publish(state_topic(key), value, retain=True)
 
