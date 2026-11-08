@@ -28,6 +28,7 @@ class Settings:
     tank_capacity_l: float = 0.0
     preheat_minutes: int = 30
     extended_telemetry: bool = True
+    debug: bool = False
     circulation_pump: bool = False
     aggregation: str = "min"
     temperature_entities: str = ""
@@ -53,6 +54,7 @@ class Settings:
             tank_capacity_l=_clamp(self.tank_capacity_l, 0, 500),
             preheat_minutes=int(_clamp(self.preheat_minutes, 1, 480)),
             extended_telemetry=bool(self.extended_telemetry),
+            debug=bool(self.debug),
             circulation_pump=bool(self.circulation_pump),
             aggregation=aggregation,
             temperature_entities=self.temperature_entities.strip(),
@@ -111,10 +113,12 @@ def load_settings(path: Path, options: dict) -> Settings:
     keep the UART closed after the option is turned off.
     """
     settings = Settings.load(path, settings_from_options(options))
+    seeded = settings_from_options(options)
     if option_is_set(options, "simulation", "simulate"):
-        settings.simulate = settings_from_options(options).simulate
-        settings = settings.sanitized()
-    return settings
+        settings.simulate = seeded.simulate
+    if option_is_set(options, "device", "debug"):
+        settings.debug = seeded.debug
+    return settings.sanitized()
 
 
 def settings_from_options(options: dict) -> Settings:
@@ -150,6 +154,7 @@ def settings_from_options(options: dict) -> Settings:
         tank_capacity_l=num("fuel", "tank_capacity_l", 0),
         preheat_minutes=int(num("timing", "preheat_minutes", 30)),
         extended_telemetry=flag("device", "extended_telemetry", True),
+        debug=flag("device", "debug", False),
         circulation_pump=flag("timing", "circulation_pump", False),
         aggregation=text("temperature", "aggregation", "min"),
         temperature_entities=text("temperature", "temperature_entities"),

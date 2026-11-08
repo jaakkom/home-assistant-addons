@@ -13,7 +13,7 @@ from .controller import Controller, aggregate
 from .faults import ChangeNotifier, LinkNotifier, Notice, fault_name
 from .fuel import FuelMeter, liters_per_hour
 from .ha import deliver_notice, read_temperature, supervisor_token
-from .link import LinkProgress, SerialLink, open_port
+from .link import LinkProgress, SerialLink, TelemetryLog, open_port
 from .mqtt_bridge import PREFIX, apply_command, collect_state, discovery_messages, state_topic
 from .settings import Settings, load_settings, option_value
 from .simulator import SimulatedHeater
@@ -89,9 +89,13 @@ def run() -> None:
         LOG.info("MQTT connected %s:%s, simulation enabled, UART is not used", host, port)
     else:
         LOG.info("MQTT connected %s:%s, serial port %s @ %s", host, port, serial_path, baud)
+    if settings.debug:
+        LOG.info("Debug log on")
 
     link: SerialLink | None = None
     progress = LinkProgress()
+    telemetry_log = TelemetryLog()
+    debug_was_on = settings.debug
     last_room: float | None = None
     last_room_at: float | None = None
     try:
@@ -149,6 +153,18 @@ def run() -> None:
                         json.dumps({"online": result.values.get("link") == "ON", "message": notice.message}),
                     )
             _log_link(progress, now, link.online(now), result.values.get("mode", ""), serial_path)
+            if settings.debug and not debug_was_on:
+                LOG.info("Debug log on")
+            elif debug_was_on and not settings.debug:
+                LOG.info("Debug log off")
+            debug_was_on = settings.debug
+            note = telemetry_log.update(now, settings.debug, link)
+            if note is not None:
+                level, text = note
+                if level == "warning":
+                    LOG.warning("Debug: %s", text)
+                else:
+                    LOG.info("Debug: %s", text)
             for key, value in result.values.items():
                 client.publish(state_topic(key), value, retain=True)
             if result.frequency_hz:

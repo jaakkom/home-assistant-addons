@@ -164,6 +164,50 @@ class LinkProgress:
         return None
 
 
+class TelemetryLog:
+    """While debug is on, say whether the 58-byte frame is arriving."""
+
+    def __init__(self) -> None:
+        self._ok = False
+        self._missing = False
+        self._last_ok_at: float | None = None
+
+    def update(self, now: float, enabled: bool, link: SerialLink) -> tuple[str, str] | None:
+        if not enabled:
+            self._ok = False
+            self._missing = False
+            self._last_ok_at = None
+            return None
+        fresh = (
+            link.extended is not None
+            and link.last_extended_at is not None
+            and now - link.last_extended_at < HANDSHAKE_INTERVAL_S
+        )
+        if fresh:
+            self._missing = False
+            due = self._last_ok_at is None or now - self._last_ok_at >= HANDSHAKE_INTERVAL_S
+            if self._ok and not due:
+                return None
+            self._ok = True
+            self._last_ok_at = now
+            frame = link.extended
+            assert frame is not None
+            return (
+                "info",
+                f"58-byte telemetry ok: {frame.mode_name}, {frame.voltage:.2f} V, "
+                f"pump {frame.pump_hz:.2f} Hz, flame {frame.flame_c:.0f} °C",
+            )
+        self._ok = False
+        self._last_ok_at = None
+        if self._missing:
+            return None
+        self._missing = True
+        if link.last_extended_at is None:
+            return ("warning", "58-byte telemetry has not arrived")
+        age = now - link.last_extended_at
+        return ("warning", f"58-byte telemetry stopped, last frame {age:.0f} s ago")
+
+
 def _read_port(port: BinaryIO) -> bytes | None:
     """Return bytes, empty bytes on timeout, or None for one spurious empty read."""
     try:
