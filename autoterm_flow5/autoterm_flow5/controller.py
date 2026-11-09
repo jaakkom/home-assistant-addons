@@ -96,6 +96,8 @@ class Controller:
         self._voltage_low_since: float | None = None
         self._saw_fault_25 = False
         self._circulation_sent = False
+        self._cabin_at: float | None = None
+        self._cabin_c: int | None = None
 
     def set_mode(self, mode: str) -> None:
         if mode in MODES and mode != self.mode:
@@ -163,7 +165,16 @@ class Controller:
             self.demand = False
 
         if fresh and room_c is not None:
-            commands.append(cabin_temperature(int(round(room_c))))
+            reported = int(round(room_c))
+            due = (
+                self._cabin_at is None
+                or reported != self._cabin_c
+                or now - self._cabin_at >= 30
+            )
+            if due:
+                commands.append(cabin_temperature(reported))
+                self._cabin_at = now
+                self._cabin_c = reported
 
         if self._stop_pending or (not self.heat_enabled and phase in ACTIVE):
             commands.append(stop_command())

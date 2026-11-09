@@ -178,6 +178,7 @@ class Framer:
         self._buf = bytearray()
         self.resyncs = 0
         self.bad_crc = 0
+        self.bad_frames: list[str] = []
 
     @property
     def pending(self) -> int:
@@ -222,6 +223,8 @@ class Framer:
             else:
                 self.bad_crc += 1
                 self.resyncs += 1
+                if len(self.bad_frames) < 6 and len(self._buf) >= HEADER_LEN:
+                    self.bad_frames.append(f"{self._buf[1]:02x}/{self._buf[4]:02x}/{length}")
                 del self._buf[:1]
         return frames
 
