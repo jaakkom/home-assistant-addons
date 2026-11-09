@@ -43,6 +43,8 @@ class SerialLink:
         self.last_frame_at: float | None = None
         self.last_handshake_at: float | None = None
         self.rx_bytes = 0
+        self.rx_preview = b""
+        self.tx_bytes = b""
         self.bad_crc = 0
         self.other_frames: list[str] = []
         self._empty_reads = 0
@@ -70,8 +72,12 @@ class SerialLink:
         gap, and stay quiet when the bytes just heard were already corrupt.
         """
         self.rx_bytes = 0
+        self.rx_preview = b""
+        self.tx_bytes = b""
         self.other_frames = []
         self.framer.bad_frames.clear()
+        self.framer.bad_notes.clear()
+        self.framer.lead = b""
         queued = self._held + list(commands or [])
         self._held = []
         bad_before = self.framer.bad_crc
@@ -90,7 +96,7 @@ class SerialLink:
             self.bad_crc = self.framer.bad_crc - bad_before
             return
         if self._needs_handshake(now) and not noisy and not self._stream_busy(now):
-            self.port.write(diagnostic_enable())
+            self._write(diagnostic_enable())
             self.last_handshake_at = now
             self._drain(now)
             if self.framer.pending:
@@ -103,7 +109,7 @@ class SerialLink:
                 self._held = queued[index:]
                 blocked = True
                 break
-            self.port.write(command)
+            self._write(command)
             self._drain(now)
             # One command in a gap. A second write, or a status poll, lands in
             # the next parameter frame. Checksums then fail until we stop talking.
@@ -112,9 +118,13 @@ class SerialLink:
                 blocked = True
                 break
         if not blocked and not noisy and not self.framer.pending and self._status_due(now):
-            self.port.write(status_request())
+            self._write(status_request())
             self._drain(now)
         self.bad_crc = self.framer.bad_crc - bad_before
+
+    def _write(self, data: bytes) -> None:
+        self.tx_bytes += data
+        self.port.write(data)
 
     def _note_parameter(self, now: float) -> None:
         if self.last_extended_at == now or any(note.startswith("02/01/") for note in self.framer.bad_frames):
@@ -195,6 +205,8 @@ class SerialLink:
             quiet = 0
             self._empty_reads = 0
             self.rx_bytes += len(data)
+            if len(self.rx_preview) < 80:
+                self.rx_preview += data[: 80 - len(self.rx_preview)]
             self._consume(now, data)
             self._note_parameter(now)
             if (
@@ -297,6 +309,7 @@ class TelemetryLog:
         self._missing = False
         self._last_ok_at: float | None = None
         self._mode: str | None = None
+        self._last_detail_at: float | None = None
 
     def update(self, now: float, enabled: bool, link: SerialLink) -> list[tuple[str, str]]:
         if not enabled:
@@ -304,6 +317,7 @@ class TelemetryLog:
             self._missing = False
             self._last_ok_at = None
             self._mode = None
+            self._last_detail_at = None
             return []
         lines: list[tuple[str, str]] = []
         mode = _observed_mode(link)
@@ -336,8 +350,13 @@ class TelemetryLog:
             return lines
         self._ok = False
         self._last_ok_at = None
-        if self._missing and not mode_changed and link.last_handshake_at != now:
+        detail_due = bool(link.bad_crc) and (
+            self._last_detail_at is None or now - self._last_detail_at >= 15
+        )
+        if self._missing and not mode_changed and link.last_handshake_at != now and not detail_due:
             return lines
+        if detail_due:
+            self._last_detail_at = now
         self._missing = True
         if link.last_extended_at is None:
             if link.last_handshake_at == now:
@@ -373,6 +392,19 @@ def _heard(link: SerialLink) -> str:
         parts.append("bad " + " ".join(link.framer.bad_frames[:4]))
     if link.other_frames:
         parts.append("other " + " ".join(link.other_frames[:4]))
+    if link.bad_crc or link.framer.pending or link.tx_bytes:
+        if link.tx_bytes:
+            parts.append("wrote " + link.tx_bytes.hex())
+        else:
+            parts.append("wrote nothing")
+    if link.framer.lead:
+        parts.append("lead " + link.framer.lead.hex())
+    if link.framer.bad_notes:
+        parts.append(link.framer.bad_notes[0])
+    if link.framer.pending:
+        parts.append(f"pending {link.framer.pending} {link.framer.peek().hex()}")
+    if link.rx_preview and (link.bad_crc or link.framer.pending):
+        parts.append("rx " + link.rx_preview.hex())
     return ", ".join(parts)
 
 

@@ -3,6 +3,7 @@ import unittest
 from autoterm_flow5.link import LinkProgress, SerialLink, TelemetryLog
 from autoterm_flow5.protocol import (
     build_frame,
+    crc_bytes,
     decode_extended,
     diagnostic_enable,
     start_thermostat,
@@ -313,6 +314,26 @@ class LinkTests(unittest.TestCase):
         lines = TelemetryLog().update(70, True, link)
         self.assertTrue(lines)
         self.assertIn("bad 02/01/4", lines[0][1])
+
+    def test_debug_dumps_the_rejected_frame(self):
+        raw = bytearray(5 + 72 + 2)
+        raw[0] = 0xAA
+        raw[1] = 0x02
+        raw[2] = 56
+        raw[4] = 0x01
+        raw[-2:] = crc_bytes(bytes(raw[:-2]))
+        port = FakePort()
+        port.chunks = [bytes(raw)]
+        link = SerialLink(port, extended_telemetry=True)
+        link.last_handshake_at = 0
+        link.last_extended_at = 0
+        link.poll(1)
+        text = " ".join(line for _, line in TelemetryLog().update(1, True, link))
+        self.assertIn("wrote nothing", text)
+        self.assertIn("bad 02/01/56", text)
+        self.assertIn("crc expect", text)
+        self.assertIn("crc ok at length 72", text)
+        self.assertIn(bytes(raw[:8]).hex(), text)
 
 
 def _extended_frame():
