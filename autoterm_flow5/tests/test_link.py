@@ -1,7 +1,13 @@
 import unittest
 
 from autoterm_flow5.link import LinkProgress, SerialLink, TelemetryLog
-from autoterm_flow5.protocol import build_frame, decode_extended, diagnostic_enable, status_request
+from autoterm_flow5.protocol import (
+    build_frame,
+    decode_extended,
+    diagnostic_enable,
+    start_thermostat,
+    status_request,
+)
 
 
 class FakePort:
@@ -237,6 +243,51 @@ class LinkTests(unittest.TestCase):
         self.assertTrue(link.online(10))
         self.assertFalse(link.online(16))
 
+    def test_a_bad_parameter_frame_does_not_hide_the_next_one(self):
+        payload = bytes(56)
+        good = build_frame(0x02, 0x01, payload)
+        bad = bytearray(good)
+        bad[-1] ^= 0xFF
+        port = FakePort()
+        port.chunks = [bytes(bad) + good]
+        link = SerialLink(port, extended_telemetry=True)
+        link.last_handshake_at = 0
+        link.last_status_at = 0
+        link.poll(5)
+        self.assertEqual(link.bad_crc, 1)
+        self.assertEqual(link.last_extended_at, 5)
+        self.assertEqual(port.writes, 0)
+
+    def test_a_broken_parameter_stream_still_carries_a_start_command(self):
+        good = build_frame(0x02, 0x01, bytes(56))
+        bad = bytearray(good)
+        bad[-1] ^= 0xFF
+        port = FakePort()
+        port.chunks = [bytes(bad)]
+        link = SerialLink(port, extended_telemetry=True)
+        link.last_handshake_at = 0
+        link.last_extended_at = 0
+        link.last_status_at = 0
+        link.poll(30, [start_thermostat()])
+        self.assertEqual(port.writes, 1)
+        self.assertTrue(bytes(port.written).startswith(start_thermostat()))
+        self.assertNotIn(diagnostic_enable(), bytes(port.written))
+        self.assertNotIn(status_request(), bytes(port.written))
+
+    def test_a_stuck_partial_does_not_hold_the_command(self):
+        frame = build_frame(0x02, 0x01, bytes(bytearray(58)))
+        port = FakePort()
+        port.chunks = [frame[:30]]
+        link = SerialLink(port, extended_telemetry=True)
+        link.last_handshake_at = 0
+        link.last_extended_at = 0
+        link.last_status_at = 9
+        command = bytes.fromhex("aa03000003d84f")
+        link.poll(10, [command])
+        self.assertEqual(port.writes, 0)
+        link.poll(11)
+        self.assertIn(command, bytes(port.written))
+
     def test_debug_names_a_frame_that_failed_the_checksum(self):
         port = FakePort()
         port.chunks = [bytes.fromhex("aa02040001000000000000")]
@@ -267,10 +318,10 @@ class TelemetryLogTests(unittest.TestCase):
         progress = TelemetryLog()
         self.assertEqual(progress.update(10, False, link), [])
         first = progress.update(10, True, link)
+        ok = next(text for level, text in first if "12.50 V" in text)
         self.assertEqual(first[0][0], "info")
-        self.assertIn("12.50 V", first[0][1])
-        self.assertIn("3.80 Hz", first[0][1])
-        self.assertIn("High", first[0][1])
+        self.assertIn("3.80 Hz", ok)
+        self.assertIn("High", ok)
         self.assertEqual(progress.update(20, True, link), [])
         link.last_extended_at = 70
         self.assertEqual(progress.update(70, True, link)[0][0], "info")

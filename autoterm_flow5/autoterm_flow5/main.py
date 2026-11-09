@@ -228,7 +228,15 @@ def step(
     port = link.port
     if settings.simulate and isinstance(port, SimulatedHeater):
         port.fault = int(settings.simulate_fault)
-    output = controller.tick(now, link.status, link.extended, room_c, room_age_s)
+    output = controller.tick(
+        now,
+        link.status,
+        link.extended,
+        room_c,
+        room_age_s,
+        link.last_status_at,
+        link.last_extended_at,
+    )
     link.poll(now, output.commands)
     frequency = link.extended.pump_hz if link.extended is not None else 0.0
     fuel.update(now, frequency, settings.pump_dose_ml)
@@ -242,8 +250,7 @@ def step(
     link_event = link_notice.update(online)
     if link_event is not None:
         notices.append(link_event)
-    coolant = link.status.coolant_c if link.status is not None else None
-    fan_on = coolant is not None and coolant >= settings.fan_temperature
+    fan_on = output.fan_on
     fresh = room_c is not None and room_age_s is not None and room_age_s <= settings.sensor_stale_s
     values = collect_state(
         link.status,
@@ -256,6 +263,8 @@ def step(
         telemetry_stale=link.telemetry_stale(now),
         fan_on=fan_on,
         frequency_hz=frequency,
+        status_at=link.last_status_at,
+        extended_at=link.last_extended_at,
     )
     return CycleResult(values=values, notices=notices, frequency_hz=frequency)
 
