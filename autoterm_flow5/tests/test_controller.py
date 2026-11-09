@@ -4,6 +4,7 @@ from autoterm_flow5.controller import Controller, aggregate
 from autoterm_flow5.protocol import (
     decode_extended,
     decode_status,
+    cabin_temperature,
     start_preheat,
     start_pump,
     start_thermostat,
@@ -74,74 +75,80 @@ class ControllerTests(unittest.TestCase):
         self.assertNotIn(start_thermostat(), commands_of(held))
         self.assertNotIn(stop_command(), commands_of(held))
 
-    def test_missing_sensor_does_not_start(self):
+    def test_room_temperature_is_sent_when_heating_is_on(self):
+        controller = Controller(self.settings())
+        controller.set_heat(True, 0)
+        output = controller.tick(0, status(), None, 18.4, 0)
+        self.assertEqual(commands_of(output)[:2], [start_thermostat(), cabin_temperature(18)])
+        held = controller.tick(1, status(3, 2, coolant=50), None, 18.4, 0)
+        self.assertNotIn(cabin_temperature(18), commands_of(held))
+        again = controller.tick(31, status(3, 2, coolant=50), None, 19.2, 0)
+        self.assertEqual(commands_of(again), [cabin_temperature(19)])
+
+    def test_switching_on_starts_before_the_room_reaches_the_drop(self):
+        controller = Controller(self.settings())
+        controller.set_heat(True, 0)
+        output = controller.tick(0, status(), None, 19, 0)
+        self.assertIn(start_thermostat(), commands_of(output))
+        self.assertTrue(output.demand)
+
+    def test_switching_on_starts_even_when_the_room_is_already_warm(self):
+        controller = Controller(self.settings())
+        controller.set_heat(True, 0)
+        output = controller.tick(0, status(), None, 22, 0)
+        self.assertIn(start_thermostat(), commands_of(output))
+
+    def test_missing_sensor_still_starts_thermostat_mode(self):
         controller = Controller(self.settings())
         controller.set_heat(True, 0)
         output = controller.tick(0, status(), None, None, None)
-        self.assertNotIn(start_thermostat(), commands_of(output))
+        self.assertIn(start_thermostat(), commands_of(output))
 
     def test_coldest_sensor(self):
         self.assertEqual(aggregate([21, 18.5, 19], "min"), 18.5)
         self.assertEqual(aggregate([21, 18.5, 19], "max"), 21)
         self.assertAlmostEqual(aggregate([10, 20], "avg"), 15)
 
-    def test_hysteresis_and_minimum_times(self):
+    def test_a_warm_room_does_not_stop_thermostat_mode(self):
         controller = Controller(self.settings())
         controller.set_heat(True, 0)
         started = controller.tick(0, status(), None, 15, 0)
         self.assertIn(start_thermostat(), commands_of(started))
-        self.assertTrue(started.demand)
-        held = controller.tick(1, status(3, 2, coolant=50), None, 19, 0)
-        self.assertNotIn(stop_command(), commands_of(held))
-        early = controller.tick(30, status(3, 2, coolant=50), None, 25, 0)
-        self.assertNotIn(stop_command(), commands_of(early))
-        self.assertFalse(early.demand)
-        stopped = controller.tick(600, status(3, 2, coolant=50), None, 25, 0)
-        self.assertIn(stop_command(), commands_of(stopped))
-        blocked = controller.tick(601, status(), None, 15, 0)
-        self.assertNotIn(start_thermostat(), commands_of(blocked))
-        again = controller.tick(1200, status(), None, 15, 0)
-        self.assertIn(start_thermostat(), commands_of(again))
+        warm = controller.tick(600, status(3, 2, coolant=50), None, 25, 0)
+        self.assertNotIn(stop_command(), commands_of(warm))
+        idle = controller.tick(601, status(), None, 15, 0)
+        self.assertNotIn(start_thermostat(), commands_of(idle))
 
-    def test_coolant_limit_and_drop(self):
+    def test_thermostat_mode_does_not_stop_for_coolant_or_voltage(self):
+        controller = Controller(self.settings(shutdown_voltage=12, shutdown_voltage_s=0))
+        controller.set_heat(True, 0)
+        controller.tick(0, status(), None, 15, 0)
+        hot = controller.tick(1, status(3, 2, coolant=95), extended(11), 15, 0)
+        self.assertNotIn(stop_command(), commands_of(hot))
+
+    def test_the_heater_is_not_restarted_after_it_stops_itself(self):
         controller = Controller(self.settings())
         controller.set_heat(True, 0)
         controller.tick(0, status(), None, 15, 0)
-        limited = controller.tick(1, status(3, 2, coolant=88), None, 15, 0)
-        self.assertIn(stop_command(), commands_of(limited))
-        waiting = controller.tick(2, status(coolant=80), None, 15, 0)
-        self.assertNotIn(start_thermostat(), commands_of(waiting))
-        ready = controller.tick(3, status(coolant=70), None, 15, 0)
-        self.assertIn(start_thermostat(), commands_of(ready))
+        controller.tick(5, status(3, 2, coolant=50), None, 15, 0)
+        idle = controller.tick(6, status(fault=25, coolant=70), None, 15, 0)
+        self.assertNotIn(start_thermostat(), commands_of(idle))
+        self.assertNotIn(stop_command(), commands_of(idle))
 
-    def test_fault_25_restarts_without_minimum_off(self):
-        controller = Controller(self.settings())
-        controller.set_heat(True, 0)
-        controller.tick(0, status(), None, 15, 0)
-        controller.tick(1, status(3, 2, fault=25, coolant=70), None, 15, 0)
-        restarted = controller.tick(2, status(fault=25, coolant=70), None, 15, 0)
-        self.assertIn(start_thermostat(), commands_of(restarted))
-
-    def test_overheat_requires_user_toggle(self):
+    def test_overheat_does_not_make_the_add_on_stop_thermostat_mode(self):
         controller = Controller(self.settings())
         controller.set_heat(True, 0)
         controller.tick(0, status(), None, 15, 0)
         tripped = controller.tick(1, status(3, 2, fault=1, coolant=90), None, 15, 0)
-        self.assertTrue(tripped.lockout)
-        self.assertIn(stop_command(), commands_of(tripped))
-        quiet = controller.tick(2, status(fault=0, coolant=40), None, 15, 0)
-        self.assertNotIn(start_thermostat(), commands_of(quiet))
-        controller.set_heat(False, 3)
-        controller.set_heat(True, 4)
-        restarted = controller.tick(5, status(coolant=40), None, 15, 0)
-        self.assertIn(start_thermostat(), commands_of(restarted))
+        self.assertFalse(tripped.lockout)
+        self.assertNotIn(stop_command(), commands_of(tripped))
 
-    def test_stale_sensor_stops_a_run(self):
+    def test_a_stale_room_sensor_does_not_stop_thermostat_mode(self):
         controller = Controller(self.settings(sensor_stale_s=900))
         controller.set_heat(True, 0)
         controller.tick(0, status(), None, 15, 0)
-        stopped = controller.tick(30, status(3, 2, coolant=50), None, 15, 901)
-        self.assertIn(stop_command(), commands_of(stopped))
+        running = controller.tick(30, status(3, 2, coolant=50), None, 15, 901)
+        self.assertNotIn(stop_command(), commands_of(running))
 
     def test_preheat_and_pump(self):
         controller = Controller(self.settings(preheat_minutes=30))
@@ -157,32 +164,32 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(first.commands, [start_pump()])
         self.assertEqual(second.commands, [])
 
-    def test_low_voltage_stop(self):
+    def test_low_voltage_does_not_stop_thermostat_mode(self):
         controller = Controller(self.settings(shutdown_voltage=12, shutdown_voltage_s=30))
         controller.set_heat(True, 0)
         controller.tick(0, status(), None, 15, 0)
         controller.tick(1, status(3, 2, coolant=50), extended(11), 15, 0)
-        stopped = controller.tick(31, status(3, 2, coolant=50), extended(11), 15, 0)
-        self.assertIn(stop_command(), commands_of(stopped))
+        still = controller.tick(31, status(3, 2, coolant=50), extended(11), 15, 0)
+        self.assertNotIn(stop_command(), commands_of(still))
 
-    def test_unexpected_shutdown_without_a_fault_restarts_immediately(self):
+    def test_an_idle_return_is_not_started_again(self):
         controller = Controller(self.settings(min_off_s=600))
         controller.set_heat(True, 0)
         controller.tick(0, status(), None, 15, 0)
         controller.tick(5, status(3, 2, coolant=50), None, 15, 0)
-        restarted = controller.tick(6, status(coolant=50), None, 15, 0)
-        self.assertIn(start_thermostat(), commands_of(restarted))
-        self.assertTrue(restarted.demand)
+        idle = controller.tick(6, status(coolant=50), None, 15, 0)
+        self.assertNotIn(start_thermostat(), commands_of(idle))
 
-    def test_unexpected_stop_at_the_coolant_limit_waits_for_the_drop(self):
+    def test_switching_on_again_sends_start(self):
         controller = Controller(self.settings())
         controller.set_heat(True, 0)
         controller.tick(0, status(), None, 15, 0)
-        controller.tick(20, status(3, 2, coolant=90), None, 15, 0)
-        waiting = controller.tick(21, status(coolant=90), None, 15, 0)
-        self.assertNotIn(start_thermostat(), commands_of(waiting))
-        ready = controller.tick(22, status(coolant=70), None, 15, 0)
-        self.assertIn(start_thermostat(), commands_of(ready))
+        controller.tick(5, status(3, 2, coolant=50), None, 15, 0)
+        controller.tick(6, status(coolant=50), None, 15, 0)
+        controller.set_heat(False, 7)
+        controller.set_heat(True, 8)
+        again = controller.tick(8, status(coolant=40), None, 15, 0)
+        self.assertIn(start_thermostat(), commands_of(again))
 
     def test_fault_shutdown_is_not_restarted_as_interference(self):
         controller = Controller(self.settings())

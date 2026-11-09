@@ -8,6 +8,7 @@ from typing import BinaryIO
 from .protocol import (
     HEADER_LEN,
     PREAMBLE,
+    TYPE_CABIN_TEMP,
     TYPE_PREHEAT_DURATION,
     TYPE_PUMP,
     TYPE_START,
@@ -68,6 +69,10 @@ class SerialLink:
         # Last time the port returned any bytes, including a frame we could not classify.
         self.last_rx_at: float | None = None
         self.last_payload_length: int | None = None
+        # The poll after start or stop carries the room temperature before
+        # another diagnostic enable. Until a parameter frame exists, that
+        # enable stays ahead of a routine temperature report.
+        self._after_control = False
 
     def close(self) -> None:
         """Release the port before another open. A second handle makes reads fail."""
@@ -133,7 +138,20 @@ class SerialLink:
         else:
             rest = []
         if sent_control and self.extended_telemetry:
+            self._after_control = True
             self._held = rest
+            self.bad_crc = self.framer.bad_crc - bad_before
+            return
+        # The heater regulates from the room temperature. It goes out once a
+        # parameter frame has been seen, and on the poll after start or stop.
+        # Before that, diagnostic mode has to be allowed to start the stream.
+        if rest and self._temperature_due(now, noisy):
+            command = rest[0]
+            self._after_control = False
+            self._write(command)
+            _log_report(command)
+            self._drain(now)
+            self._held = rest[1:]
             self.bad_crc = self.framer.bad_crc - bad_before
             return
         if self._needs_handshake(now) and not noisy and not self._stream_busy(now):
@@ -151,13 +169,16 @@ class SerialLink:
                 break
             # Cabin temperature waits for a checksum-valid parameter frame or a
             # quiet line. It is not written on top of a frame that already failed.
-            if not _control_command(command) and not self._report_gap(now, noisy):
+            if not _control_command(command) and not self._temperature_due(now, noisy):
                 self._held = rest[index:]
                 blocked = True
                 break
             self._write(command)
             if _control_command(command):
                 _log_control(command)
+            else:
+                self._after_control = False
+                _log_report(command)
             self._drain(now)
             # One command in a gap. A second write, or a status poll, lands in
             # the next parameter frame. Checksums then fail until we stop talking.
@@ -200,14 +221,21 @@ class SerialLink:
         """
         return self.last_parameter_at is not None and now - self.last_parameter_at < STREAM_GAP_S
 
+    def _temperature_due(self, now: float, noisy: bool) -> bool:
+        if not self._report_gap(now, noisy):
+            return False
+        return self.last_extended_at is not None or self._after_control
+
     def _report_gap(self, now: float, noisy: bool) -> bool:
-        """True when a cabin-temperature report can be written without cutting a frame."""
-        if noisy or self.last_handshake_at == now:
+        """True when the room temperature can be written without cutting a frame.
+
+        A finished status reply is a gap. A parameter frame is a gap only at
+        the moment it completes. Bytes still arriving are not.
+        """
+        if noisy or self.last_handshake_at == now or self.framer.pending:
             return False
         if self.last_extended_at == now:
             return True
-        if self.rx_bytes > 0:
-            return False
         return not self._stream_busy(now)
 
     def _heard_recently(self, now: float) -> bool:
@@ -230,13 +258,20 @@ class SerialLink:
             return True
         return now - self.last_extended_at >= ENABLE_AGAIN_S
 
+    def _telemetry_recent(self, now: float) -> bool:
+        """A parameter frame arrived recently. Status would be written into the next one."""
+        for stamp in (self.last_extended_at, self.last_parameter_at):
+            if stamp is not None and now - stamp < ENABLE_AGAIN_S:
+                return True
+        return False
+
     def _status_due(self, now: float) -> bool:
         # A status poll in the gap still overlaps the next parameter frame.
         # Mode, voltage, pump, and flame already come from that frame.
-        # The enable command needs the rest of this poll to itself. Writing
-        # status immediately after it was landing on the stream before it started,
-        # and a status reply then silenced the link for fifteen seconds.
-        if self._stream_busy(now) or self.last_handshake_at == now:
+        # The enable command needs the rest of this poll to itself. One valid
+        # frame used to be followed by a status poll eight seconds later, and
+        # the stream then stopped.
+        if self._stream_busy(now) or self.last_handshake_at == now or self._telemetry_recent(now):
             return False
         if not self.extended_telemetry or self.last_extended_at is None:
             return True
@@ -372,6 +407,11 @@ def _parameter_note(note: str) -> bool:
         return int(size) in (56, 58, 72)
     except ValueError:
         return False
+
+
+def _log_report(command: bytes) -> None:
+    if len(command) >= 6 and command[4] == TYPE_CABIN_TEMP:
+        LOG.info("Sent room temperature %s °C", command[5])
 
 
 def _log_control(command: bytes) -> None:

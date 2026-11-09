@@ -325,7 +325,35 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(bytes(port.written), diagnostic_enable())
         port.written.clear()
         link.poll(4)
+        self.assertEqual(bytes(port.written), b"")
+        link.poll(16)
+        self.assertEqual(bytes(port.written), diagnostic_enable())
+        port.written.clear()
+        link.poll(17)
         self.assertEqual(bytes(port.written), status_request())
+
+    def test_room_temperature_goes_out_on_the_poll_after_start(self):
+        cabin = cabin_temperature(18)
+        port = FakePort()
+        link = SerialLink(port, extended_telemetry=True)
+        link.last_handshake_at = 0
+        link.poll(1, [start_thermostat(), cabin])
+        self.assertEqual(bytes(port.written), start_thermostat())
+        self.assertEqual(link._held, [cabin])
+        port.written.clear()
+        link.poll(2)
+        self.assertEqual(bytes(port.written), cabin)
+        self.assertNotIn(diagnostic_enable(), bytes(port.written))
+
+    def test_room_temperature_waits_until_diagnostic_mode_has_started(self):
+        frame = build_frame(0x04, 0x0F, bytes(18))
+        cabin = cabin_temperature(19)
+        port = FakePort()
+        port.chunks = [frame]
+        link = SerialLink(port, extended_telemetry=True)
+        link.poll(1, [cabin])
+        self.assertEqual(bytes(port.written), diagnostic_enable())
+        self.assertEqual(link._held, [cabin])
 
     def test_start_is_sent_on_its_own(self):
         port = FakePort()
