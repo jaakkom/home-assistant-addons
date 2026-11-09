@@ -40,6 +40,53 @@ class CrcTests(unittest.TestCase):
         self.assertEqual(frame[5:7].hex(), "0022")
 
 
+class FramerRepairTests(unittest.TestCase):
+    def _payload(self) -> bytes:
+        raw = bytearray(56)
+        raw[0] = 3
+        raw[1] = 2
+        raw[15] = 17
+        raw[17], raw[18] = 0x02, 0x10
+        raw[19] = 40
+        raw[20] = 55
+        raw[21] = 30
+        raw[22], raw[23] = 0x01, 0x22
+        return bytes(raw)
+
+    def test_one_missing_byte_is_restored_and_the_next_frame_remains(self):
+        payload = self._payload()
+        good = build_frame(0x02, 0x01, payload)
+        short = good[:26] + good[27:]
+        frames = Framer().feed(short + good)
+        self.assertEqual([frame.raw for frame in frames], [good, good])
+
+    def test_two_missing_bytes_do_not_swallow_the_next_frame(self):
+        good = build_frame(0x02, 0x01, self._payload())
+        short = good[:26] + good[28:]
+        frames = Framer().feed(short + good)
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(frames[0].raw, good)
+
+    def test_captured_frame_with_one_dropped_byte(self):
+        # 10:38:43, one byte missing, the next header starts at byte 62.
+        received = bytes.fromhex(
+            "aa0238000100010008b1000584000584000000640000012c"
+            "1f21011b0052034c0268004f0268026d0000000000000125"
+            "01f201b1ff00000100000001eadc"
+        )
+        following = bytes.fromhex("aa0238000100010008b1")
+        frames = Framer().feed(received + following)
+        self.assertEqual(len(frames), 1)
+        parsed = decode_extended(frames[0].payload)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.voltage, 28.3)
+        self.assertEqual(parsed.pump_hz, 0)
+        self.assertEqual(parsed.flame_c, 27)
+        framer = Framer()
+        framer.feed(received + following)
+        self.assertEqual(framer.peek(2), b"\xaa\x02")
+
+
 class StatusTests(unittest.TestCase):
     def test_captured_status_prefix(self):
         payload = bytes.fromhex("02030046460081430001015cff0100000000")

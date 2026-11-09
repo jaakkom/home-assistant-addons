@@ -32,6 +32,22 @@ class FakePort:
         return data
 
 
+class GlitchAfterPartial(FakePort):
+    def __init__(self, first: bytes) -> None:
+        super().__init__()
+        self.first = first
+        self.reads = 0
+
+    def read(self, _size: int) -> bytes:
+        self.reads += 1
+        if self.reads == 1:
+            return self.first
+        raise OSError(
+            "device reports readiness to read but returned no data "
+            "(device disconnected or multiple access on port?)"
+        )
+
+
 class EmptyPort(FakePort):
     def __init__(self) -> None:
         super().__init__()
@@ -82,6 +98,14 @@ class LinkTests(unittest.TestCase):
             link.poll(0)
         link.close()
         self.assertTrue(port.closed)
+
+    def test_a_read_glitch_keeps_a_partial_parameter_frame(self):
+        frame = build_frame(0x02, 0x01, bytes(56))
+        port = GlitchAfterPartial(frame[:20])
+        link = SerialLink(port, extended_telemetry=True)
+        link.poll(1)
+        self.assertGreater(link.framer.pending, 0)
+        self.assertEqual(port.writes, 0)
 
     def test_a_recent_status_survives_an_empty_read_glitch(self):
         port = EmptyPort()
@@ -147,8 +171,8 @@ class LinkTests(unittest.TestCase):
         link.last_extended_at = 1
         link.poll(10)
         self.assertEqual(link.extended.voltage, 12.5)
-        self.assertLess(port.order.index("r"), port.order.index("w"))
-        self.assertTrue(bytes(port.written).startswith(status_request()))
+        self.assertEqual(port.writes, 0)
+        self.assertEqual(port.order[0], "r")
 
     def test_poll_requests_status_and_handshake_once(self):
         port = FakePort()
@@ -204,7 +228,7 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(link.last_extended_at, 10)
         self.assertEqual(port.writes, 0)
 
-    def test_status_is_asked_again_after_the_quiet_period(self):
+    def test_a_parameter_frame_keeps_status_off_through_the_gap(self):
         frame = build_frame(0x02, 0x01, bytes(bytearray(58)))
         port = FakePort()
         port.chunks = [frame]
@@ -213,8 +237,7 @@ class LinkTests(unittest.TestCase):
         link.last_status_at = 0
         link.last_extended_at = 0
         link.poll(8)
-        self.assertEqual(port.writes, 1)
-        self.assertIn(status_request(), bytes(port.written))
+        self.assertEqual(port.writes, 0)
 
     def test_a_command_is_its_own_frame(self):
         port = FakePort()

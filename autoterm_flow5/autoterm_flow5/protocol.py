@@ -74,16 +74,78 @@ EXTENDED_MAPPED = frozenset(
 )
 
 
+_CRC_TABLE = []
+for _index in range(256):
+    _crc = _index
+    for _ in range(8):
+        _crc = (_crc >> 1) ^ 0xA001 if _crc & 1 else _crc >> 1
+    _CRC_TABLE.append(_crc)
+_CRC_REV = {value: index for index, value in enumerate(_CRC_TABLE)}
+
+
+def _crc_step(crc: int, byte: int) -> int:
+    return _CRC_TABLE[(crc ^ byte) & 0xFF] ^ (crc >> 8)
+
+
+def _crc_solve_byte(crc_in: int, crc_out: int) -> int | None:
+    """The one data byte that carries `crc_in` to `crc_out`, if it exists."""
+    index = _CRC_REV.get(crc_out ^ (crc_in >> 8))
+    if index is None:
+        return None
+    return index ^ (crc_in & 0xFF)
+
+
+def _apply_bits(mat: list[int], crc: int) -> int:
+    out = 0
+    for bit in range(16):
+        if crc & (1 << bit):
+            out ^= mat[bit]
+    return out
+
+
+def _compose(outer: list[int], inner: list[int]) -> list[int]:
+    return [_apply_bits(outer, inner[bit]) for bit in range(16)]
+
+
+def _invert_matrix(mat: list[int]) -> list[int]:
+    aug = [0] * 16
+    for row in range(16):
+        bits = 0
+        for col in range(16):
+            if mat[col] & (1 << row):
+                bits |= 1 << col
+        aug[row] = bits | (1 << (16 + row))
+    for col in range(16):
+        pivot = next(row for row in range(col, 16) if aug[row] & (1 << col))
+        aug[col], aug[pivot] = aug[pivot], aug[col]
+        for row in range(16):
+            if row != col and aug[row] & (1 << col):
+                aug[row] ^= aug[col]
+    inverse = [0] * 16
+    for row in range(16):
+        high = aug[row] >> 16
+        for col in range(16):
+            if high & (1 << col):
+                inverse[col] |= 1 << row
+    return inverse
+
+
+def _crc_powers() -> tuple[list[list[int]], list[list[int]]]:
+    step = [_crc_step(1 << bit, 0) for bit in range(16)]
+    powers = [[1 << bit for bit in range(16)]]
+    for _ in range(80):
+        powers.append(_compose(step, powers[-1]))
+    return powers, [_invert_matrix(power) for power in powers]
+
+
+_CRC_POWERS, _CRC_INVERSE = _crc_powers()
+
+
 def crc16_modbus(data: bytes) -> int:
     """CRC-16/MODBUS (poly 0xA001, init 0xFFFF)."""
     crc = 0xFFFF
     for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            if crc & 1:
-                crc = (crc >> 1) ^ 0xA001
-            else:
-                crc >>= 1
+        crc = _crc_step(crc, byte)
     return crc
 
 
@@ -93,7 +155,17 @@ def _known_frame(dev: int, msg_type: int, length: int) -> bool:
         return True
     if dev == DEV_HEATER and msg_type == TYPE_STATUS and length == STATUS_LEN:
         return True
+    if dev == DEV_HEATER and msg_type == TYPE_DIAGNOSTIC_MODE and length == 1:
+        return True
     return False
+
+
+def parameter_pending(buf: bytes) -> bool:
+    """True when `buf` starts a parameter frame that has not been finished."""
+    if len(buf) < HEADER_LEN or buf[0] != PREAMBLE:
+        return False
+    length = int.from_bytes(buf[2:4], "little")
+    return buf[1] == DEV_EXTENDED and buf[4] == TYPE_EXTENDED and length in (56, 58, 72)
 
 
 def crc_bytes(data: bytes) -> bytes:
@@ -217,11 +289,8 @@ class Framer:
                 del self._buf[:1]
                 continue
             total = HEADER_LEN + length + CRC_LEN
-            if len(self._buf) < total:
-                break
-            raw = bytes(self._buf[:total])
-            ok = crc_bytes(raw[:-CRC_LEN]) == raw[-CRC_LEN:]
-            if ok:
+            if len(self._buf) >= total and crc_bytes(self._buf[: total - CRC_LEN]) == self._buf[total - CRC_LEN : total]:
+                raw = bytes(self._buf[:total])
                 frames.append(
                     Frame(
                         raw=raw,
@@ -233,21 +302,77 @@ class Framer:
                     )
                 )
                 del self._buf[:total]
-            else:
+                continue
+            nxt = self._next_header(total)
+            if nxt == -1:
+                # An 0xAA near the end is not yet long enough to classify.
+                break
+            if nxt is not None and nxt < total:
+                restored = None
+                if (
+                    total - nxt == 1
+                    and self._buf[1] == DEV_EXTENDED
+                    and self._buf[4] == TYPE_EXTENDED
+                ):
+                    restored = _restore_one_byte(bytes(self._buf[:nxt]))
+                if restored is not None:
+                    frames.append(
+                        Frame(
+                            raw=restored,
+                            dev=restored[1],
+                            length=length,
+                            msg_type=restored[4],
+                            payload=restored[HEADER_LEN:-CRC_LEN],
+                            crc_ok=True,
+                        )
+                    )
+                    del self._buf[:nxt]
+                    continue
                 self.bad_crc += 1
                 self.resyncs += 1
                 if len(self.bad_frames) < 6 and len(self._buf) >= HEADER_LEN:
                     self.bad_frames.append(f"{self._buf[1]:02x}/{self._buf[4]:02x}/{length}")
                 if len(self.bad_notes) < 2:
-                    self.bad_notes.append(self._bad_note(length))
-                # A known header with a bad checksum is still one whole frame.
-                # Dropping a single byte makes the following frame start in the
-                # middle, so every later checksum fails too.
-                if _known_frame(self._buf[1], self._buf[4], length):
-                    del self._buf[:total]
-                else:
-                    del self._buf[:1]
+                    self.bad_notes.append(f"short by {total - nxt}, kept the next frame")
+                # The declared window already contains the next header. Dropping
+                # the whole window would eat that header and fail every frame after it.
+                del self._buf[:nxt]
+                continue
+            if len(self._buf) < total:
+                break
+            self.bad_crc += 1
+            self.resyncs += 1
+            if len(self.bad_frames) < 6 and len(self._buf) >= HEADER_LEN:
+                self.bad_frames.append(f"{self._buf[1]:02x}/{self._buf[4]:02x}/{length}")
+            if len(self.bad_notes) < 2:
+                self.bad_notes.append(self._bad_note(length))
+            # A known header with a bad checksum is still one whole frame.
+            # Dropping a single byte makes the following frame start in the
+            # middle, so every later checksum fails too.
+            if _known_frame(self._buf[1], self._buf[4], length):
+                del self._buf[:total]
+            else:
+                del self._buf[:1]
         return frames
+
+    def _next_header(self, total: int) -> int | None:
+        """Index of the next known header before `total`.
+
+        Returns -1 when an 0xAA in that window still needs more bytes.
+        """
+        index = 1
+        limit = min(total, len(self._buf))
+        while index < limit:
+            found = self._buf.find(PREAMBLE, index, limit)
+            if found < 0:
+                return None
+            if found + HEADER_LEN > len(self._buf):
+                return -1
+            length = int.from_bytes(self._buf[found + 2 : found + 4], "little")
+            if length <= MAX_PAYLOAD and _known_frame(self._buf[found + 1], self._buf[found + 4], length):
+                return found
+            index = found + 1
+        return None
 
     def reset(self) -> None:
         """Drop a partial frame that is no longer arriving."""
@@ -405,6 +530,63 @@ def decode_extended(payload: bytes) -> ExtendedFrame | None:
             if index not in EXTENDED_MAPPED
         },
     )
+
+
+def _plausible_extended(payload: bytes) -> bool:
+    parsed = decode_extended(payload)
+    if parsed is None:
+        return False
+    return (
+        8.0 <= parsed.voltage <= 36.0
+        and -40.0 <= parsed.flame_c <= 600.0
+        and 0.0 <= parsed.pump_hz <= 10.0
+    )
+
+
+def _restore_one_byte(received: bytes) -> bytes | None:
+    """Rebuild a parameter frame that lost one byte before the next header.
+
+    The last two received bytes stay the checksum. Each earlier position has
+    at most one byte that makes that checksum match. The frame is restored
+    only when exactly one of those candidates has a real voltage, pump
+    frequency, and flame temperature.
+    """
+    if len(received) < HEADER_LEN + CRC_LEN:
+        return None
+    data = received[:-CRC_LEN]
+    target = int.from_bytes(received[-CRC_LEN:], "big")
+    header = received[:HEADER_LEN]
+    prefix = 0xFFFF
+    prefixes = [prefix]
+    for byte in data:
+        prefix = _crc_step(prefix, byte)
+        prefixes.append(prefix)
+    suffix_const = [0] * (len(data) + 1)
+    for index in range(len(data) + 1):
+        state = 0
+        for byte in data[index:]:
+            state = _crc_step(state, byte)
+        suffix_const[index] = state
+    found: list[bytes] = []
+    for index in range(len(data) + 1):
+        remaining = len(data) - index
+        required = _apply_bits(_CRC_INVERSE[remaining], target ^ suffix_const[index])
+        value = _crc_solve_byte(prefixes[index], required)
+        if value is None:
+            continue
+        trial = data[:index] + bytes((value,)) + data[index:] + received[-CRC_LEN:]
+        if trial[:HEADER_LEN] != header:
+            continue
+        if crc_bytes(trial[:-CRC_LEN]) != trial[-CRC_LEN:]:
+            continue
+        if not _plausible_extended(trial[HEADER_LEN:-CRC_LEN]):
+            continue
+        found.append(trial)
+        if len(found) > 1:
+            return None
+    if not found:
+        return None
+    return found[0]
 
 
 def classify(frame: Frame) -> StatusFrame | ExtendedFrame | None:
