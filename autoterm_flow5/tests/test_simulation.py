@@ -163,22 +163,15 @@ class SimulationLoopTests(unittest.TestCase):
         self.assertGreater(float(later.values["fuel_total_ml"]), 0)
         self.assertEqual(later.values["fan_request"], "ON")
 
-    def test_coolant_limit_stops_and_restarts_without_waiting_out_min_off(self):
+    def test_coolant_limit_does_not_stop_thermostat_mode(self):
         self.controller.set_heat(True, self.now)
-        stopped_at = None
-        restarted_at = None
         for _ in range(40):
             self.cycle()
-            if stopped_at is None and "stop" in self.heater.events:
-                stopped_at = self.now
-            if stopped_at is not None and self.heater.events.count("start") >= 2:
-                restarted_at = self.now
-                break
-        self.assertIsNotNone(stopped_at)
-        self.assertIsNotNone(restarted_at)
-        self.assertLess(restarted_at - stopped_at, 60)
+        self.assertNotIn("stop", self.heater.events)
+        self.assertEqual(self.heater.events.count("start"), 1)
+        self.assertIn("cabin", self.heater.events)
 
-    def test_room_temperature_does_not_stop_before_minimum_run(self):
+    def test_room_temperature_does_not_stop_the_heater(self):
         self.settings.coolant_limit = 95
         self.controller.settings = self.settings
         self.cycle()
@@ -189,8 +182,9 @@ class SimulationLoopTests(unittest.TestCase):
         self.assertNotIn("stop", self.heater.events)
         self.now += 600
         result = self.cycle(room=30)
-        self.assertIn("stop", self.heater.events)
-        self.assertEqual(result.values["burner"], "OFF")
+        self.assertNotIn("stop", self.heater.events)
+        self.assertEqual(result.values["burner"], "ON")
+        self.assertIn("cabin", self.heater.events)
 
     def test_fault_notice_is_sent_once(self):
         self.controller.set_heat(True, self.now)
@@ -209,7 +203,7 @@ class SimulationLoopTests(unittest.TestCase):
         self.assertEqual([notice.action for notice in cleared.notices], ["dismiss"])
         self.assertEqual(cleared.values["fault_text"], "No fault")
 
-    def test_overheat_stays_locked_until_heat_is_toggled(self):
+    def test_overheat_is_reported_and_the_heater_is_left_running(self):
         self.settings.coolant_limit = 95
         self.controller.settings = self.settings
         self.controller.set_heat(True, self.now)
@@ -218,13 +212,15 @@ class SimulationLoopTests(unittest.TestCase):
         reported = self.cycle()
         self.assertEqual(reported.values["fault_text"], "Overheating")
         locked = self.cycle()
-        self.assertEqual(locked.values["lockout"], "ON")
-        self.assertIn("stop", self.heater.events)
+        self.assertEqual(locked.values["lockout"], "OFF")
+        self.assertNotIn("stop", self.heater.events)
         self.settings.simulate_fault = 0
         for _ in range(4):
             self.cycle()
         self.assertEqual(self.heater.events.count("start"), 1)
         self.controller.set_heat(False, self.now)
+        self.cycle()
+        self.assertIn("stop", self.heater.events)
         self.controller.set_heat(True, self.now)
         self.cycle()
         self.assertEqual(self.heater.events.count("start"), 2)
@@ -249,7 +245,7 @@ class SimulationLoopTests(unittest.TestCase):
         self.assertEqual(recovered.values["link"], "ON")
         self.assertTrue(any(notice.action == "dismiss" for notice in recovered.notices))
 
-    def test_shutdown_without_a_fault_restarts_the_burner(self):
+    def test_an_idle_return_is_not_started_again(self):
         self.settings.coolant_limit = 95
         self.controller.settings = self.settings
         self.cycle()
@@ -257,12 +253,11 @@ class SimulationLoopTests(unittest.TestCase):
         self.cycle()
         self.assertEqual(self.heater.events.count("start"), 1)
         self.heater.burning = False
+        idle = self.cycle()
         self.cycle()
-        restarted = self.cycle()
-        self.assertEqual(self.heater.events.count("start"), 2)
-        self.assertEqual(restarted.values["fault_code"], "0")
-        self.assertEqual(restarted.values["mode"], "High")
-        self.assertEqual(restarted.values["burner"], "ON")
+        self.assertEqual(self.heater.events.count("start"), 1)
+        self.assertEqual(idle.values["fault_code"], "0")
+        self.assertEqual(idle.values["burner"], "OFF")
 
     def test_discovery_advertises_the_simulation_entities(self):
         payloads = "\n".join(payload for _topic, payload in discovery_messages())

@@ -22,17 +22,11 @@ The official Mosquitto broker is required so entities appear through MQTT discov
 
 ## Control
 
-The climate entity holds the room target. Heating does not start when the add-on boots. Restarting the add-on leaves a burner that is already running alone: it does not send stop, and it does not send a new start. Turn heating on from the climate entity or the switch, or select preheat or pump-only mode. Turning it off is what sends stop.
+The climate entity and the heating switch only turn thermostat mode on and off. Heating does not start when the add-on boots. Restarting the add-on leaves a burner that is already running alone: it does not send stop, and it does not send a new start. Turning heating on sends start. Turning it off sends stop.
 
-Room temperature comes from Home Assistant sensors. The coldest reading is used by default. That same reading is sent to the heater as the panel cabin temperature. The setpoint itself is not sent on the wire.
+Room temperature comes from Home Assistant sensors. The coldest reading is used by default. That reading is sent to the heater as the panel cabin temperature, when it changes and about every thirty seconds. The heater uses it to start, stop, and protect itself. The add-on does not send stop because the room, the coolant, or the voltage reached a limit, and it does not start the burner again after the heater has stopped on its own.
 
-Heat demand starts when the room is below the target by the drop (default 2 °C) and ends when it is above the target by the rise (default 1 °C). Minimum run and minimum idle are 10 minutes, so a one-degree bounce does not relight the burner immediately.
-
-The coolant limit is its own number, default 88 °C, range 20–95 °C. The drop required before another start is 18 °C by default. The limit is enforced by a stop command from the add-on. The heater's stored setpoint is not written, because no confirmed frame exists for that. If the heater's own limit is lower, the heater stops first.
-
-The burner is not started without a fresh sensor reading. If the reading goes stale during a run, the burner is stopped. Overheating (code 1) and lock (code 37) do not restart until heating is switched off and back on.
-
-If the heater returns to idle while heating is still on, and the status frame has no fault code, the add-on starts it again immediately. Electromagnetic interference can shut the burner down without a fault. That restart does not wait out the minimum idle time. A stop the add-on itself requested still follows the minimum idle time, the coolant drop, or the lockout. When the coolant is already at the limit, the add-on waits for the coolant drop before lighting again.
+The coolant limit, room drop, and room rise are not written to the heater. No confirmed frame exists for those stored setpoints. Preheat and pump modes still use the add-on's coolant and voltage limits.
 
 There is no power-level command. Low, middle, and high are the heater's own stages and are published as sensors.
 

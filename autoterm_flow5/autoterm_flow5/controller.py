@@ -1,7 +1,9 @@
-"""Panel replacement: room-temperature demand, coolant limit, minimum times.
+"""Panel replacement.
 
-The heater has no confirmed power-level command. This loop only sends
-start, stop, pump, and the cabin-temperature report.
+In thermostat mode the add-on only switches the heater on and off and
+reports the room temperature. The heater starts, stops, and protects
+itself from that temperature. Preheat and pump modes still use the
+add-on's own limits.
 """
 
 from __future__ import annotations
@@ -59,14 +61,6 @@ def _phase_from(state: int, sub: int) -> str:
     return "other"
 
 
-def update_demand(current: bool, temperature: float, target: float, drop: float, rise: float) -> bool:
-    if temperature <= target - drop:
-        return True
-    if temperature >= target + rise:
-        return False
-    return current
-
-
 @dataclass
 class ControlOutput:
     commands: list[bytes] = field(default_factory=list)
@@ -108,6 +102,8 @@ class Controller:
         self._circulation_sent = False
         self._cabin_at: float | None = None
         self._cabin_c: int | None = None
+        # One thermostat start per time the user switches heating on.
+        self._thermostat_on = False
 
     def set_mode(self, mode: str) -> None:
         if mode in MODES and mode != self.mode:
@@ -125,6 +121,8 @@ class Controller:
             self._start_at = None
             self._preheat_sent = False
             self._pump_sent = False
+            self._thermostat_on = False
+            self.demand = True
         elif not enabled and self.heat_enabled:
             self.heat_enabled = False
             self.demand = False
@@ -154,12 +152,15 @@ class Controller:
         coolant = _coolant(status, extended, status_at, extended_at)
         voltage = extended.voltage if extended is not None else None
 
-        if fault in LOCKOUT_CODES:
+        if fault in LOCKOUT_CODES and self.mode != "thermostat":
             self.lockout = True
-        if fault == 25:
+        if fault == 25 and self.mode != "thermostat":
             self._saw_fault_25 = True
         if phase == "idle" and self._phase in ACTIVE | {"cooldown", "pump"}:
-            if fault in SELF_STOP_CODES or self._saw_fault_25:
+            if self.mode == "thermostat":
+                # The heater ended the burn from its own sensor or protection.
+                self._run_started_at = None
+            elif fault in SELF_STOP_CODES or self._saw_fault_25:
                 self._stop_reason = "fault25"
                 self._stopped_at = now
                 self._saw_fault_25 = False
@@ -167,29 +168,25 @@ class Controller:
             elif fault == 0 and not self.lockout and self._stop_reason is None and self.heat_enabled:
                 self._note_unexpected_stop(now, coolant)
 
-        if fresh and self.heat_enabled and self.mode == "thermostat" and not self.lockout:
-            self.demand = update_demand(
-                self.demand,
-                room_c,  # type: ignore[arg-type]
-                settings.room_target,
-                settings.room_drop,
-                settings.room_rise,
-            )
+        if self.heat_enabled and self.mode == "thermostat":
+            self.demand = True
         elif not self.heat_enabled or self.mode != "thermostat":
             self.demand = False
 
+        thermostat = self.mode == "thermostat"
         if self._stop_pending or (self._stop_requested and phase in ACTIVE):
             commands.append(stop_command())
             self._stop_pending = False
             self._run_started_at = None
             self._start_at = None
-        elif self.heat_enabled and not self.lockout:
+            self._thermostat_on = False
+        elif self.heat_enabled and (thermostat or not self.lockout):
             if phase in ACTIVE and self._run_started_at is None:
                 self._run_started_at = now
             commands.extend(
                 self._mode_commands(now, phase, fresh, fault, coolant, voltage, room_age_s)
             )
-        elif self.lockout and phase in ACTIVE:
+        elif self.lockout and phase in ACTIVE and not thermostat:
             commands.append(stop_command())
             self._run_started_at = None
             self._start_at = None
@@ -268,62 +265,17 @@ class Controller:
         voltage: float | None,
         room_age_s: float | None,
     ) -> list[bytes]:
-        settings = self.settings
-        if not fresh and room_age_s is not None and room_age_s > settings.sensor_stale_s and phase in ACTIVE:
-            self._mark_stop(now, "stale")
-            return [stop_command()]
-        if _safety_stop(self, now, phase, coolant, voltage):
-            return [stop_command()]
-        if (
-            phase in ACTIVE
-            and not self.demand
-            and self._run_started_at is not None
-            and now - self._run_started_at >= settings.min_on_s
-        ):
-            self._mark_stop(now, "room")
-            return [stop_command()]
-        if phase == "idle" and self._may_start(now, fresh, fault, coolant):
+        # The cabin-temperature report is what the heater regulates from.
+        # One start enters that mode. The heater then starts, stops, and
+        # applies its own limits. A later idle state is its decision.
+        del fresh, fault, coolant, voltage, room_age_s
+        if phase == "idle" and not self._thermostat_on:
+            self._thermostat_on = True
             self._run_started_at = now
-            self._stop_reason = None
             self._start_at = now
+            self._stop_reason = None
             return [start_thermostat()]
-        waiting_for_coolant = (
-            settings.circulation_pump
-            and self.demand
-            and phase == "idle"
-            and not self._may_start(now, fresh, fault, coolant)
-            and self._stop_reason in {"coolant", "fault25"}
-        )
-        if waiting_for_coolant and not self._circulation_sent:
-            self._circulation_sent = True
-            return [start_pump()]
-        if not waiting_for_coolant:
-            self._circulation_sent = False
         return []
-
-    def _may_start(self, now: float, fresh: bool, fault: int, coolant: float | None) -> bool:
-        if not fresh or not self.demand or self.lockout:
-            return False
-        if fault not in (0, 25):
-            return False
-        if self._start_at is not None and now - self._start_at < 10 and self._stop_reason is None:
-            return False
-        reason = self._stop_reason
-        if reason == "room" and self._stopped_at is not None:
-            if now - self._stopped_at < self.settings.min_off_s:
-                return False
-        if reason == "voltage" and self._stopped_at is not None:
-            if now - self._stopped_at < self.settings.min_off_s:
-                return False
-        if reason == "stale" and self._stopped_at is not None:
-            if now - self._stopped_at < self.settings.min_off_s:
-                return False
-        if reason in {"coolant", "fault25"}:
-            if coolant is None:
-                return False
-            if coolant > self.settings.coolant_limit - self.settings.coolant_drop:
-                return False
-        return True
 
     def _note_unexpected_stop(self, now: float, coolant: float | None) -> None:
         """The burner left an active phase with no fault and no stop from us.
