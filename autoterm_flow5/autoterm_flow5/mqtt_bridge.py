@@ -329,7 +329,7 @@ def collect_state(
         "fault_code": fault,
         "fault_text": fault_name(fault),
         "fault_active": "ON" if fault else "OFF",
-        "coolant": _num(status.coolant_c if status else None),
+        "coolant": _num(_coolant_c(status, extended)),
         "coolant_a": status.coolant_a if status else "",
         "coolant_b": status.coolant_b if status else "",
         "voltage_like": status.voltage_like if status else "",
@@ -493,6 +493,38 @@ def _apply_number(settings: Settings, key: str, text: str) -> None:
         settings.simulate_fault = int(float(text))
     else:
         raise ValueError(key)
+
+
+def _coolant_c(status: StatusFrame | None, extended: ExtendedFrame | None) -> float | None:
+    """Coolant temperature for Home Assistant.
+
+    The short status frame has it, but that frame is not polled once the
+    parameter stream is running. The stream's liquid byte is the same
+    temperature the diagnostics page shows as the liquid sensor.
+    """
+    if status is not None:
+        return status.coolant_c
+    if extended is not None:
+        return float(extended.liquid_c)
+    return None
+
+
+def mqtt_state_updates(values: dict[str, str], previous: dict[str, str] | None = None) -> dict[str, str]:
+    """States that changed to a real value.
+
+    An empty payload makes a Home Assistant measurement unknown, and
+    repeating every topic once a second crowds out the values that did change.
+    """
+    updates: dict[str, str] = {}
+    for key, value in values.items():
+        if value == "":
+            continue
+        if previous is not None and previous.get(key) == value:
+            continue
+        updates[key] = value
+    if previous is not None:
+        previous.update(updates)
+    return updates
 
 
 def _num(value: float | None) -> str:

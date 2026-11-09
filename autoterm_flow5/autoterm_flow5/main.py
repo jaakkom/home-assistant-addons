@@ -14,7 +14,7 @@ from .faults import ChangeNotifier, LinkNotifier, Notice, fault_name
 from .fuel import FuelMeter, liters_per_hour
 from .ha import deliver_notice, read_temperature, supervisor_token
 from .link import LinkProgress, SerialLink, TelemetryLog, open_port
-from .mqtt_bridge import PREFIX, apply_command, collect_state, discovery_messages, state_topic
+from .mqtt_bridge import PREFIX, apply_command, collect_state, discovery_messages, mqtt_state_updates, state_topic
 from .panel import PanelHub, start_panel
 from .settings import Settings, load_settings, option_value
 from .simulator import SimulatedHeater
@@ -110,6 +110,7 @@ def run() -> None:
     last_diag_log: float | None = None
     last_room: float | None = None
     last_room_at: float | None = None
+    published: dict[str, str] = {}
 
     def handle_command(topic: str, payload: str, now: float) -> None:
         action = apply_command(controller, settings, topic, payload, now, fuel)
@@ -141,7 +142,7 @@ def run() -> None:
                         )
                 except Exception as exc:  # serial port missing or busy
                     LOG.warning("Could not open the serial port: %s", exc)
-                    _publish_offline(client, controller, fuel, settings, last_room, panel)
+                    _publish_offline(client, controller, fuel, settings, last_room, published, panel)
                     time.sleep(REOPEN_S)
                     continue
             link.extended_telemetry = settings.extended_telemetry
@@ -211,7 +212,7 @@ def run() -> None:
                 LOG.warning("Telemetry frame stopped")
                 announced_telemetry = False
             panel.publish(result.values)
-            for key, value in result.values.items():
+            for key, value in mqtt_state_updates(result.values, published).items():
                 client.publish(state_topic(key), value, retain=True)
             if result.frequency_hz:
                 LOG.debug(
@@ -358,7 +359,7 @@ def _current_fault(link: SerialLink) -> int:
     return 0
 
 
-def _publish_offline(client, controller, fuel, settings, room, panel: PanelHub | None = None) -> None:
+def _publish_offline(client, controller, fuel, settings, room, published: dict[str, str], panel: PanelHub | None = None) -> None:
     values = collect_state(
         None,
         None,
@@ -373,7 +374,7 @@ def _publish_offline(client, controller, fuel, settings, room, panel: PanelHub |
     )
     if panel is not None:
         panel.publish(values)
-    for key, value in values.items():
+    for key, value in mqtt_state_updates(values, published).items():
         client.publish(state_topic(key), value, retain=True)
 
 

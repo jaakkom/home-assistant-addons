@@ -3,7 +3,8 @@ import unittest
 
 from autoterm_flow5.controller import Controller
 from autoterm_flow5.fuel import FuelMeter
-from autoterm_flow5.mqtt_bridge import apply_command, collect_state, discovery_messages
+from autoterm_flow5.mqtt_bridge import apply_command, collect_state, discovery_messages, mqtt_state_updates
+from autoterm_flow5.protocol import decode_extended
 from autoterm_flow5.settings import Settings
 
 
@@ -67,6 +68,32 @@ class MqttTests(unittest.TestCase):
         )
         self.assertEqual(values["fuel_level_percent"], "100.00")
         self.assertEqual(values["fuel_hours"], "")
+
+    def test_coolant_follows_the_liquid_sensor_when_status_is_absent(self):
+        raw = bytearray(58)
+        raw[19] = 42
+        extended = decode_extended(bytes(raw))
+        settings = Settings()
+        values = collect_state(
+            None,
+            extended,
+            fuel=FuelMeter(),
+            settings=settings,
+            controller=Controller(settings),
+            room_c=6.8,
+            online=True,
+            telemetry_stale=False,
+            fan_on=False,
+            frequency_hz=4.2,
+        )
+        self.assertEqual(values["coolant"], "42.00")
+        self.assertEqual(values["liquid"], "42")
+        self.assertEqual(values["coolant_a"], "")
+        published: dict[str, str] = {}
+        first = mqtt_state_updates(values, published)
+        self.assertEqual(first["coolant"], "42.00")
+        self.assertNotIn("coolant_a", first)
+        self.assertEqual(mqtt_state_updates(values, published), {})
 
 
 if __name__ == "__main__":
