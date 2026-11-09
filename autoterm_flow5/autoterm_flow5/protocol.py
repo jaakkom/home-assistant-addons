@@ -188,6 +188,8 @@ class Framer:
         self.resyncs = 0
         self.bad_crc = 0
         self.bad_frames: list[str] = []
+        self.bad_notes: list[str] = []
+        self.lead = b""
 
     @property
     def pending(self) -> int:
@@ -204,6 +206,8 @@ class Framer:
                 break
             if start:
                 self.resyncs += 1
+                if not self.lead:
+                    self.lead = bytes(self._buf[: min(start, 16)])
                 del self._buf[:start]
             if len(self._buf) < HEADER_LEN:
                 break
@@ -234,6 +238,8 @@ class Framer:
                 self.resyncs += 1
                 if len(self.bad_frames) < 6 and len(self._buf) >= HEADER_LEN:
                     self.bad_frames.append(f"{self._buf[1]:02x}/{self._buf[4]:02x}/{length}")
+                if len(self.bad_notes) < 2:
+                    self.bad_notes.append(self._bad_note(length))
                 # A known header with a bad checksum is still one whole frame.
                 # Dropping a single byte makes the following frame start in the
                 # middle, so every later checksum fails too.
@@ -246,6 +252,42 @@ class Framer:
     def reset(self) -> None:
         """Drop a partial frame that is no longer arriving."""
         self._buf.clear()
+
+    def peek(self, limit: int = 24) -> bytes:
+        return bytes(self._buf[:limit])
+
+    def _bad_note(self, length: int) -> str:
+        """Hex and checksum of one rejected frame, plus a nearby match if there is one."""
+        total = HEADER_LEN + length + CRC_LEN
+        raw = bytes(self._buf[:total])
+        expect = crc_bytes(raw[:-CRC_LEN])
+        parts = [
+            f"frame {raw.hex()}",
+            f"crc expect {expect.hex()} got {raw[-CRC_LEN:].hex()}",
+        ]
+        alts = []
+        for trial in (56, 58, 72):
+            if trial == length:
+                continue
+            trial_total = HEADER_LEN + trial + CRC_LEN
+            if len(self._buf) < trial_total:
+                continue
+            chunk = bytes(self._buf[:trial_total])
+            if crc_bytes(chunk[:-CRC_LEN]) == chunk[-CRC_LEN:]:
+                alts.append(str(trial))
+        if alts:
+            parts.append("crc ok at length " + ",".join(alts))
+        nxt = self._buf.find(PREAMBLE, 1)
+        if nxt > 0 and len(self._buf) >= nxt + HEADER_LEN:
+            nlen = int.from_bytes(self._buf[nxt + 2 : nxt + 4], "little")
+            ntotal = HEADER_LEN + nlen + CRC_LEN
+            if 0 < nlen <= MAX_PAYLOAD and len(self._buf) >= nxt + ntotal:
+                chunk = bytes(self._buf[nxt : nxt + ntotal])
+                mark = "ok" if crc_bytes(chunk[:-CRC_LEN]) == chunk[-CRC_LEN:] else "bad"
+                parts.append(f"next aa +{nxt} {chunk[1]:02x}/{chunk[4]:02x}/{nlen} {mark}")
+            else:
+                parts.append(f"next aa +{nxt}")
+        return " ".join(parts)
 
 
 @dataclass
