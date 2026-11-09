@@ -99,6 +99,8 @@ def run() -> None:
     progress = LinkProgress()
     telemetry_log = TelemetryLog()
     debug_was_on = settings.debug
+    announced_telemetry = False
+    last_diag_log: float | None = None
     last_room: float | None = None
     last_room_at: float | None = None
 
@@ -176,6 +178,27 @@ def run() -> None:
                     LOG.warning("Debug: %s", text)
                 else:
                     LOG.info("Debug: %s", text)
+            if link.last_extended_at == now and link.extended is not None:
+                if not announced_telemetry:
+                    frame = link.extended
+                    LOG.info(
+                        "Telemetry frame: %s, %.2f V, pump %.2f Hz, flame %.0f °C",
+                        frame.mode_name,
+                        frame.voltage,
+                        frame.pump_hz,
+                        frame.flame_c,
+                    )
+                announced_telemetry = True
+            elif (
+                link.last_handshake_at == now
+                and link.last_parameter_at != now
+                and (last_diag_log is None or now - last_diag_log >= 15)
+            ):
+                LOG.info("Diagnostic reports requested, no telemetry frame yet")
+                last_diag_log = now
+            elif announced_telemetry and link.telemetry_stale(now):
+                LOG.warning("Telemetry frame stopped")
+                announced_telemetry = False
             panel.publish(result.values)
             for key, value in result.values.items():
                 client.publish(state_topic(key), value, retain=True)
