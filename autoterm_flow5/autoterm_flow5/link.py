@@ -76,7 +76,10 @@ class SerialLink:
         self._held = []
         bad_before = self.framer.bad_crc
         extended_before = self._extended_count
-        self._drain(now)
+        # The first listen waits out a frame period. One 0.3 s read misses a
+        # burner that is already transmitting, and the enable command then
+        # hits that frame.
+        self._drain(now, patient=self._first_listen())
         noisy = self.framer.bad_crc > bad_before and self._extended_count == extended_before
         # A partial frame that gained no bytes this poll will not finish.
         # Holding the user's start or stop behind it is what makes the button late.
@@ -117,9 +120,21 @@ class SerialLink:
         if self.last_extended_at == now or any(note.startswith("02/01/") for note in self.framer.bad_frames):
             self.last_parameter_at = now
 
+    def _first_listen(self) -> bool:
+        return (
+            self.extended_telemetry
+            and self.last_handshake_at is None
+            and self.last_parameter_at is None
+            and self.last_extended_at is None
+        )
+
     def _stream_busy(self, now: float) -> bool:
-        """Parameter frames are arriving. Another request would be written into them."""
-        return self.last_parameter_at is not None and now - self.last_parameter_at < 3
+        """Parameter frames are arriving. Another request would be written into them.
+
+        Three seconds is shorter than the retry, so a restart kept asking
+        diagnostic mode every five seconds and the checksum never recovered.
+        """
+        return self.last_parameter_at is not None and now - self.last_parameter_at < ENABLE_AGAIN_S
 
     def _needs_handshake(self, now: float) -> bool:
         if not self.extended_telemetry:
@@ -136,7 +151,13 @@ class SerialLink:
 
     def _status_due(self, now: float) -> bool:
         if self._stream_busy(now) and self.last_extended_at != now:
-            return False
+            # A gap with nothing heard can take one status poll. Bytes on the
+            # wire mean the parameter frame is still in progress.
+            if self.rx_bytes > 0:
+                return False
+            if self.last_status_at is None:
+                return False
+            return now - self.last_status_at >= STATUS_PERIOD_S
         if not self.extended_telemetry or self.last_extended_at is None:
             return True
         if now - self.last_extended_at >= ENABLE_AGAIN_S:
@@ -145,13 +166,16 @@ class SerialLink:
             return True
         return now - self.last_status_at >= STATUS_PERIOD_S
 
-    def _drain(self, now: float) -> None:
+    def _drain(self, now: float, patient: bool = False) -> None:
         """Read until the line is idle and no half-received frame remains.
 
         After a whole parameter frame, return at once. Waiting out the read
         timeout spends the gap, and the next request then hits the following frame.
+        The first listen uses three quiet reads, about a frame period, so a
+        restart can see the stream before it transmits.
         """
         quiet = 0
+        idle_reads = 3 if patient else 1
         for _ in range(REPLY_READS):
             data = _read_port(self.port)
             if data is None:
@@ -165,7 +189,7 @@ class SerialLink:
                 quiet += 1
                 # One quiet read is a gap between frames. A partial frame gets
                 # a little longer, in case the rest is still coming.
-                if self.framer.pending == 0 or quiet >= 3:
+                if quiet >= 3 or (self.framer.pending == 0 and quiet >= idle_reads):
                     return
                 continue
             quiet = 0
