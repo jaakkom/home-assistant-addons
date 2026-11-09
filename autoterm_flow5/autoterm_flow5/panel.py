@@ -268,6 +268,7 @@ const TEXT = {
     telemetry: "Telemetry stale", glow: "Glow plug", fan: "Interior fan", simulation: "Simulation",
     on: "On", off: "Off", coolant: "Coolant", coolant_a: "Coolant A", coolant_b: "Coolant B",
     flame: "Flame", liquid: "Liquid sensor", overheat: "Overheat sensor", board: "Board", room: "Room",
+    request: "Requested temperature",
     rising: "Rising sensor", voltage: "Voltage", pump: "Pump", fan_target: "Fan target",
     fan_actual: "Fan measured", fan_current: "Fan current", engine: "Engine state", relay: "Relay",
     consumption: "Consumption", per_minute: "Per minute", average: "Hour average", level: "Fuel level",
@@ -295,6 +296,7 @@ const TEXT = {
     telemetry: "Telemetria vanhentunut", glow: "Hehkutulppa", fan: "Sisäpuhallin", simulation: "Simulointi",
     on: "Päällä", off: "Pois", coolant: "Neste", coolant_a: "Neste A", coolant_b: "Neste B",
     flame: "Liekki", liquid: "Nesteanturi", overheat: "Ylikuumenemisanturi", board: "Piirilevy", room: "Huone",
+    request: "Pyyntilämpötila",
     rising: "Nouseva anturi", voltage: "Jännite", pump: "Pumppu", fan_target: "Puhaltimen tavoite",
     fan_actual: "Puhallin mitattu", fan_current: "Puhallinvirta", engine: "Moottorin tila", relay: "Rele",
     consumption: "Kulutus", per_minute: "Minuutissa", average: "Tunnin keskiarvo", level: "Polttoaine",
@@ -324,7 +326,8 @@ const GROUPS = [
   ["temperatures", [
     ["coolant", "coolant", " °C"], ["coolant_a", "coolant_a", " °C"], ["coolant_b", "coolant_b", " °C"],
     ["flame", "flame", " °C"], ["liquid", "liquid", " °C"], ["overheat", "overheat", " °C"],
-    ["board", "board", " °C"], ["room", "room", " °C"], ["rising_sensor", "rising", " °C"]
+    ["board", "board", " °C"], ["room", "room", " °C"], ["room_target", "request", " °C"],
+    ["rising_sensor", "rising", " °C"]
   ]],
   ["electrical", [
     ["voltage", "voltage", " V"], ["pump_hz", "pump", " Hz"], ["fan_target", "fan_target"],

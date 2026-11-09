@@ -442,6 +442,11 @@ def _log_report(command: bytes) -> None:
 
 
 def _log_control(command: bytes) -> None:
+    if command[4] == TYPE_START and len(command) >= 7:
+        value = int.from_bytes(command[5:7], "big")
+        if value <= 40:
+            LOG.info("Sent requested temperature %s °C", value)
+            return
     kind = {
         TYPE_START: "start",
         TYPE_STOP: "stop",

@@ -5,6 +5,7 @@ from autoterm_flow5.protocol import (
     decode_extended,
     decode_status,
     cabin_temperature,
+    requested_temperature,
     start_preheat,
     start_pump,
     start_thermostat,
@@ -72,8 +73,10 @@ class ControllerTests(unittest.TestCase):
         self.assertNotIn(start_thermostat(), commands_of(ignition))
         controller.set_heat(True, 2)
         held = controller.tick(2, status(3, 2, coolant=50), None, 15, 0)
-        self.assertNotIn(start_thermostat(), commands_of(held))
+        self.assertIn(requested_temperature(20), commands_of(held))
         self.assertNotIn(stop_command(), commands_of(held))
+        again = controller.tick(3, status(3, 2, coolant=50), None, 15, 0)
+        self.assertNotIn(requested_temperature(20), commands_of(again))
 
     def test_room_temperature_is_sent_when_heating_is_on(self):
         controller = Controller(self.settings())
@@ -179,6 +182,20 @@ class ControllerTests(unittest.TestCase):
         controller.tick(5, status(3, 2, coolant=50), None, 15, 0)
         idle = controller.tick(6, status(coolant=50), None, 15, 0)
         self.assertNotIn(start_thermostat(), commands_of(idle))
+
+    def test_the_thermostat_card_updates_a_running_heater(self):
+        controller = Controller(self.settings(room_target=18))
+        controller.set_heat(True, 0)
+        running = controller.tick(1, status(3, 2, coolant=50), None, 17, 0)
+        self.assertIn(requested_temperature(18), commands_of(running))
+        controller.settings.room_target = 22
+        changed = controller.tick(2, status(3, 2, coolant=50), None, 17, 0)
+        self.assertEqual(commands_of(changed), [requested_temperature(22)])
+        held = controller.tick(3, status(3, 2, coolant=50), None, 17, 0)
+        self.assertNotIn(requested_temperature(22), commands_of(held))
+        controller.settings.room_target = 22
+        idle = controller.tick(4, status(), None, 17, 0)
+        self.assertNotIn(requested_temperature(22), commands_of(idle))
 
     def test_switching_on_again_sends_start(self):
         controller = Controller(self.settings())

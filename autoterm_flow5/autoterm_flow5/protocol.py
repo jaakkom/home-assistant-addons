@@ -207,8 +207,20 @@ def stop_command() -> bytes:
     return build_frame(DEV_PANEL, TYPE_STOP)
 
 
-def start_thermostat() -> bytes:
-    return build_frame(DEV_PANEL, TYPE_START, bytes.fromhex("0022"))
+def requested_temperature(celsius: int) -> bytes:
+    """Comfort-panel request, 0–40 °C.
+
+    BINAR-5S command type 1 carries this value. The captured thermostat
+    start ``0022`` is 34 °C in that same two-byte form. Sending it again
+    changes the request while the burner is already running. The heater
+    compares it with the cabin temperature and applies its own hysteresis.
+    """
+    value = max(0, min(40, int(celsius)))
+    return build_frame(DEV_PANEL, TYPE_START, value.to_bytes(2, "big"))
+
+
+def start_thermostat(celsius: int = 20) -> bytes:
+    return requested_temperature(celsius)
 
 
 def start_preheat(minutes: int) -> list[bytes]:
