@@ -1,5 +1,5 @@
 name: Autoterm Flow 5
-version: "0.4.20"
+version: "0.4.21"
 slug: autoterm_flow5
 description: >-
   Replaces the Autoterm Flow 5 control panel. Controls and monitors the
@@ -38,17 +38,19 @@ options:
     temperature_entities: ""
     aggregation: min
     room_target: 20
-    room_drop: 2
-    room_rise: 1
   timing:
-    min_on_minutes: 10
-    min_off_minutes: 10
     sensor_stale_minutes: 15
     preheat_minutes: 30
     circulation_pump: false
   protection:
     coolant_limit: 88
-    coolant_drop: 18
+    auxiliary_mode: off
+    auxiliary_limit: 95
+    relay_mode: auto
+    pump_signal: plain
+    pump_with_engine: false
+    pump_standby: true
+    alarm_channel: true
     shutdown_voltage: 11.5
     shutdown_voltage_seconds: 30
     fan_temperature: 40
@@ -74,17 +76,19 @@ schema:
     temperature_entities: str?
     aggregation: list(min|avg|max)
     room_target: float(0,40)
-    room_drop: float(0,10)
-    room_rise: float(0,10)
   timing:
-    min_on_minutes: int(0,120)
-    min_off_minutes: int(0,120)
     sensor_stale_minutes: int(1,120)
     preheat_minutes: int(1,480)
     circulation_pump: bool
   protection:
     coolant_limit: float(20,95)
-    coolant_drop: float(1,40)
+    auxiliary_mode: list(off|auto|manual)
+    auxiliary_limit: float(80,95)
+    relay_mode: list(auto|off)
+    pump_signal: list(plain|pwm)
+    pump_with_engine: bool
+    pump_standby: bool
+    alarm_channel: bool
     shutdown_voltage: float(9,30)
     shutdown_voltage_seconds: int(1,600)
     fan_temperature: float(30,60)

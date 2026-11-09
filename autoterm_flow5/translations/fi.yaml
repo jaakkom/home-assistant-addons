@@ -41,25 +41,13 @@ configuration:
       room_target:
         name: Huoneen tavoite
         description: Ensimmäinen tavoitelämpötila, °C.
-      room_drop:
-        name: Huoneen pudotus
-        description: Lämmönpyyntö alkaa, kun lämpö on näin paljon alle tavoitteen.
-      room_rise:
-        name: Huoneen nousu
-        description: Lämmönpyyntö päättyy, kun lämpö on näin paljon yli tavoitteen.
   timing:
     name: Käyntiajat
-    description: Kuinka kauan poltin käy tai seisoo, ja esilämmityksen kesto.
+    description: Esilämmityksen kesto ja se, milloin huonelukema on liian vanha lähetettäväksi.
     fields:
-      min_on_minutes:
-        name: Vähimmäiskäynti
-        description: Lyhin polttoaika huonelämpötilasta tehdyn käynnistyksen jälkeen.
-      min_off_minutes:
-        name: Vähimmäisseisonta
-        description: Lyhin seisonta huonelämpötilasta tehdyn pysäytyksen jälkeen.
       sensor_stale_minutes:
         name: Anturin vanheneminen
-        description: Pysäytä poltin, jos kaikki ohjausanturit ovat tätä vanhempia.
+        description: Tätä vanhempaa huonelukemaa ei lähetetä lämmittimelle.
       preheat_minutes:
         name: Esilämmityksen kesto
         description: Esilämmityksen ensimmäinen kesto minuutteina.
@@ -67,15 +55,33 @@ configuration:
         name: Kierto odotuksessa
         description: Käytä kiertovesipumppua, kun lämpöä vielä tarvitaan ja poltin on sammuksissa.
   protection:
-    name: Neste ja jännite
-    description: Rajat, jotka pysäyttävät polton myös vähimmäiskäynnin aikana.
+    name: Lämmittimen asetukset
+    description: Arvot luetaan ohjausyksikön muistista ja kirjoitetaan takaisin, kun niitä muutetaan.
     fields:
       coolant_limit:
-        name: Nesteen yläraja
-        description: Pysäytä poltto tässä nesteen lämpötilassa. Alue 20–95 °C.
-      coolant_drop:
-        name: Nesteen pudotus
-        description: Uusi käynnistys vasta, kun neste on laskenut näin monta astetta.
+        name: Odotuslämpötila
+        description: Nesteen lämpötila, jossa poltin siirtyy odotukseen. Alue 20–95 °C.
+      auxiliary_mode:
+        name: Lisälämmitys
+        description: Lisälämmitys pois, automaattinen tai käsikäyttö.
+      auxiliary_limit:
+        name: Lisälämmityksen odotus
+        description: Odotuslämpötila lisälämmityksenä. Alue 80–95 °C.
+      relay_mode:
+        name: Ohjaamon rele
+        description: Ohjaamon lämmittimen rele automaattisesti tai pois.
+      pump_signal:
+        name: Pumpun signaali
+        description: Nestepumpun ohjaus tavallisena tai PWM-signaalina.
+      pump_with_engine:
+        name: Pumppu moottorin kanssa
+        description: Käytä lämmittimen pumppua myös auton moottorin käydessä.
+      pump_standby:
+        name: Pumppu odotuksessa
+        description: Jätä nestepumppu pyörimään, kun poltin on siirtynyt odotukseen.
+      alarm_channel:
+        name: Hälytyskanava
+        description: Salli käynnistys kytkimellä tai hälyttimen kanavalla.
       shutdown_voltage:
         name: Sammutusjännite
         description: Pysäytä poltin, jos syöttöjännite pysyy tämän alapuolella.
@@ -83,8 +89,8 @@ configuration:
         name: Sammutusjännitteen aika
         description: Kuinka kauan jännitteen pitää olla alhaalla ennen pysäytystä.
       fan_temperature:
-        name: Puhaltimen lämpö
-        description: Julkaise sisäpuhaltimen pyyntö, kun neste saavuttaa tämän lämpötilan.
+        name: Ohjaamon puhallin
+        description: Nesteen lämpötila, jossa ohjaamon lämmittimen rele menee päälle. Alue 30–60 °C.
   fuel:
     name: Polttoaine
     description: Pumpun annos ja tankin koko, joilla kulutus ja polttoaineen määrä lasketaan.

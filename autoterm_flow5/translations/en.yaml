@@ -41,25 +41,13 @@ configuration:
       room_target:
         name: Room target
         description: Initial target temperature in °C.
-      room_drop:
-        name: Room drop
-        description: Heat demand starts this many degrees below the target.
-      room_rise:
-        name: Room rise
-        description: Heat demand ends this many degrees above the target.
   timing:
     name: Run times
-    description: How long the burner stays on or off, and the preheat length.
+    description: How long a preheat runs, and when a room sensor reading is too old to send.
     fields:
-      min_on_minutes:
-        name: Minimum run
-        description: Minimum burner time after a room-temperature start.
-      min_off_minutes:
-        name: Minimum idle
-        description: Minimum idle time after a room-temperature stop.
       sensor_stale_minutes:
         name: Sensor timeout
-        description: Stop the burner if every control sensor is older than this.
+        description: A room reading older than this is not sent to the heater.
       preheat_minutes:
         name: Preheat duration
         description: Initial preheat length in minutes.
@@ -67,15 +55,33 @@ configuration:
         name: Circulation while waiting
         description: Run the coolant pump while heat is still required and the burner is idle.
   protection:
-    name: Coolant and voltage
-    description: Limits that stop combustion even during the minimum run.
+    name: Heater settings
+    description: These values are read from the control unit and written back when changed.
     fields:
       coolant_limit:
-        name: Coolant limit
-        description: Stop combustion at this coolant temperature. Range 20–95 °C.
-      coolant_drop:
-        name: Coolant drop
-        description: Allow a new start only after the coolant falls by this amount.
+        name: Standby temperature
+        description: Coolant temperature where the burner goes to standby. Range 20–95 °C.
+      auxiliary_mode:
+        name: Auxiliary heater
+        description: Off, automatic, or manual auxiliary-heater mode.
+      auxiliary_limit:
+        name: Auxiliary standby
+        description: Standby temperature while running as an auxiliary heater. Range 80–95 °C.
+      relay_mode:
+        name: Cabin heater relay
+        description: Automatic cabin-heater relay, or off.
+      pump_signal:
+        name: Pump signal
+        description: Plain or PWM drive for the coolant pump.
+      pump_with_engine:
+        name: Pump with engine
+        description: Also run the heater pump while the vehicle engine is running.
+      pump_standby:
+        name: Pump in standby
+        description: Keep the coolant pump running after the burner goes to standby.
+      alarm_channel:
+        name: Alarm channel
+        description: Allow a switch or alarm channel to start the heater.
       shutdown_voltage:
         name: Shutdown voltage
         description: Stop the burner when the supply stays below this voltage.
@@ -83,8 +89,8 @@ configuration:
         name: Shutdown voltage time
         description: How long the voltage must stay low before stopping.
       fan_temperature:
-        name: Fan temperature
-        description: Publish the interior-fan request when coolant reaches this temperature.
+        name: Cabin fan temperature
+        description: Coolant temperature that turns the cabin heater relay on. Range 30–60 °C.
   fuel:
     name: Fuel
     description: Pump dose and tank size used to calculate consumption and the fuel level.

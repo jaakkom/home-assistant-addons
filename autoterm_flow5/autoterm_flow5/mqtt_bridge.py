@@ -165,11 +165,7 @@ def discovery_messages() -> list[tuple[str, str]]:
         _binary("fan_request", "Interior fan"),
         _binary("lockout", "Lockout", device_class="problem"),
         _number("coolant_limit", "Coolant limit", 20, 95, 1, "°C"),
-        _number("coolant_drop", "Coolant drop", 1, 40, 1, "°C"),
-        _number("room_drop", "Room drop", 0, 10, 0.5, "°C"),
-        _number("room_rise", "Room rise", 0, 10, 0.5, "°C"),
-        _number("min_on", "Minimum run", 0, 120, 1, "min"),
-        _number("min_off", "Minimum idle", 0, 120, 1, "min"),
+        _number("auxiliary_limit", "Auxiliary standby temperature", 80, 95, 1, "°C"),
         _number("sensor_stale", "Sensor timeout", 1, 120, 1, "min"),
         _number("shutdown_voltage", "Shutdown voltage", 9, 30, 0.1, "V"),
         _number("shutdown_voltage_seconds", "Shutdown voltage time", 1, 600, 1, "s"),
@@ -236,6 +232,48 @@ def discovery_messages() -> list[tuple[str, str]]:
         "availability_topic": f"{PREFIX}/availability",
         "device": DEVICE,
     })))
+    messages.append((f"homeassistant/select/{PREFIX}/auxiliary_mode/config", json.dumps({
+        "name": "Auxiliary heater",
+        "unique_id": f"{PREFIX}_auxiliary_mode",
+        "command_topic": set_topic("auxiliary_mode"),
+        "state_topic": state_topic("auxiliary_mode"),
+        "options": ["off", "auto", "manual"],
+        "availability_topic": f"{PREFIX}/availability",
+        "device": DEVICE,
+    })))
+    messages.append((f"homeassistant/select/{PREFIX}/relay_mode/config", json.dumps({
+        "name": "Cabin heater relay",
+        "unique_id": f"{PREFIX}_relay_mode",
+        "command_topic": set_topic("relay_mode"),
+        "state_topic": state_topic("relay_mode"),
+        "options": ["auto", "off"],
+        "availability_topic": f"{PREFIX}/availability",
+        "device": DEVICE,
+    })))
+    messages.append((f"homeassistant/select/{PREFIX}/pump_signal/config", json.dumps({
+        "name": "Pump signal",
+        "unique_id": f"{PREFIX}_pump_signal",
+        "command_topic": set_topic("pump_signal"),
+        "state_topic": state_topic("pump_signal"),
+        "options": ["plain", "pwm"],
+        "availability_topic": f"{PREFIX}/availability",
+        "device": DEVICE,
+    })))
+    for key, name in (
+        ("pump_with_engine", "Pump with engine"),
+        ("pump_standby", "Pump in standby"),
+        ("alarm_channel", "Alarm channel"),
+    ):
+        messages.append((f"homeassistant/switch/{PREFIX}/{key}/config", json.dumps({
+            "name": name,
+            "unique_id": f"{PREFIX}_{key}",
+            "command_topic": set_topic(key),
+            "state_topic": state_topic(key),
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "availability_topic": f"{PREFIX}/availability",
+            "device": DEVICE,
+        })))
     messages.append((f"homeassistant/select/{PREFIX}/aggregation/config", json.dumps({
         "name": "Temperature aggregation",
         "unique_id": f"{PREFIX}_aggregation",
@@ -377,12 +415,14 @@ def collect_state(
         "aggregation": settings.aggregation,
         "circulation": "ON" if settings.circulation_pump else "OFF",
         "coolant_limit": settings.coolant_limit,
-        "coolant_drop": settings.coolant_drop,
-        "room_drop": settings.room_drop,
-        "room_rise": settings.room_rise,
+        "auxiliary_mode": settings.auxiliary_mode,
+        "auxiliary_limit": settings.auxiliary_limit,
+        "relay_mode": settings.relay_mode,
+        "pump_signal": settings.pump_signal,
+        "pump_with_engine": "ON" if settings.pump_with_engine else "OFF",
+        "pump_standby": "ON" if settings.pump_standby else "OFF",
+        "alarm_channel": "ON" if settings.alarm_channel else "OFF",
         "room_target": settings.room_target,
-        "min_on": settings.min_on_s / 60,
-        "min_off": settings.min_off_s / 60,
         "sensor_stale": settings.sensor_stale_s / 60,
         "shutdown_voltage": settings.shutdown_voltage,
         "shutdown_voltage_seconds": settings.shutdown_voltage_s,
@@ -414,6 +454,7 @@ def apply_command(
     """Apply one retained or live command. Return 'reset-fuel' when asked."""
     key = topic.removeprefix(f"{PREFIX}/set/")
     text = payload.strip()
+    previous = getattr(settings, key, None)
     if key == "power":
         controller.set_heat(text == "ON", now)
     elif key == "stop":
@@ -445,6 +486,18 @@ def apply_command(
         settings.circulation_pump = text == "ON"
     elif key == "debug":
         settings.debug = text == "ON"
+    elif key == "auxiliary_mode" and text in {"off", "auto", "manual"}:
+        settings.auxiliary_mode = text
+    elif key == "relay_mode" and text in {"auto", "off"}:
+        settings.relay_mode = text
+    elif key == "pump_signal" and text in {"plain", "pwm"}:
+        settings.pump_signal = text
+    elif key == "pump_with_engine":
+        settings.pump_with_engine = text == "ON"
+    elif key == "pump_standby":
+        settings.pump_standby = text == "ON"
+    elif key == "alarm_channel":
+        settings.alarm_channel = text == "ON"
     else:
         try:
             _apply_number(settings, key, text)
@@ -453,6 +506,8 @@ def apply_command(
     controller.settings = settings.sanitized()
     for field_name, value in vars(controller.settings).items():
         setattr(settings, field_name, value)
+    if getattr(settings, key, None) != previous:
+        controller.note_device_setting(key)
     if fuel is not None and fuel.clamp_to_capacity(settings.tank_capacity_l):
         fuel.save()
     return None
@@ -461,20 +516,12 @@ def apply_command(
 def _apply_number(settings: Settings, key: str, text: str) -> None:
     if key == "room_target":
         settings.room_target = float(text)
-    elif key == "room_drop":
-        settings.room_drop = float(text)
-    elif key == "room_rise":
-        settings.room_rise = float(text)
-    elif key == "min_on":
-        settings.min_on_s = float(text) * 60
-    elif key == "min_off":
-        settings.min_off_s = float(text) * 60
     elif key == "sensor_stale":
         settings.sensor_stale_s = float(text) * 60
     elif key == "coolant_limit":
         settings.coolant_limit = float(text)
-    elif key == "coolant_drop":
-        settings.coolant_drop = float(text)
+    elif key == "auxiliary_limit":
+        settings.auxiliary_limit = float(text)
     elif key == "shutdown_voltage":
         settings.shutdown_voltage = float(text)
     elif key == "shutdown_voltage_seconds":

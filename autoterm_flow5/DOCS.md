@@ -26,9 +26,9 @@ Thermostat mode is the comfort-panel mode. Flow 5 regulates its power from the r
 
 The climate card's target is the requested temperature. It is sent when heating is switched on, including when the burner is already running, and again whenever the card value changes. The same value is not sent again just because the heater returns to idle. Turning heating off sends stop once, and again about every five seconds only while the burner is still running. Heating does not start when the add-on boots. Restarting the add-on does not send stop. If the heating switch is already on, the card's requested temperature is sent once.
 
-Room temperature comes from Home Assistant sensors. Enter them on the add-on configuration page, for example `sensor.analog_input_8`. That list is read on every start. The coldest reading is used by default. That reading is sent to the heater as the comfort panel's cabin temperature, when it changes and about every thirty seconds. The add-on does not send stop because the room, the coolant, or the voltage reached a limit, and it does not start the burner again after the heater has stopped on its own.
+Room temperature comes from Home Assistant sensors. Enter them on the add-on configuration page, for example `sensor.analog_input_8`. That list is read on every start. The coldest reading is used by default. That reading is sent to the heater as the comfort panel's cabin temperature, when it changes and about every thirty seconds. The add-on does not send stop because the room or the coolant reached a limit, and it does not start the burner again after the heater has stopped on its own.
 
-The coolant limit, room drop, and room rise are not written to the heater. Preheat and pump modes still use the add-on's coolant and voltage limits.
+The control unit keeps its own settings block. On startup the add-on reads that block and shows it: standby temperature (20–95 °C), auxiliary-heater mode and its standby temperature (80–95 °C), cabin-heater relay and the temperature that turns it on (30–60 °C), pump signal, pump-with-engine, pump-in-standby, and the alarm channel. Changing one of those writes the same block back. Bytes that were not changed stay as they were read. The heater is the source of those values: a number saved only in the add-on does not override the control unit. A write the heater does not accept while it is burning is tried again once the burner is idle. The room target, the cabin-temperature report, and the preheat duration are still ordinary run commands. They are not part of that stored block. Low supply voltage can still stop preheat and pump mode. Thermostat mode leaves voltage and coolant stops to the heater.
 
 There is no power-level command. Low, middle, and high are the heater's own stages and are published as sensors.
 
@@ -71,13 +71,13 @@ An unknown code is shown as its number.
 
 ## Simulation
 
-Turn on **Simulation** in the add-on options to run without a USB-UART adapter. The process does not open a serial port. An internal heater answers status requests, the diagnostic-mode command, and start, stop, and pump commands with the same frames a Flow 5 uses.
+Turn on **Simulation** in the add-on options to run without a USB-UART adapter. The process does not open a serial port. An internal heater answers status requests, the diagnostic-mode command, the stored-settings block, and start, stop, and pump commands with the same frames a Flow 5 uses.
 
 When no temperature entities are configured, the control temperature is **Simulated room temperature** (default 15 °C). Change it from that number entity to warm or cool the room. If temperature entities are set, those Home Assistant sensors are used instead, so the integration can be checked against real sensors while the heater stays simulated.
 
 **Simulated fault code** makes the virtual heater report that code. Use it to check the fault sensor and the notification. Set it back to 0 to clear the fault. The code is not sent to a real heater.
 
-Coolant climbs while the burner is on and falls after a stop, so the coolant limit and the following restart can be seen in Home Assistant. The **Simulation** binary sensor is on while this mode is active.
+Coolant climbs while the burner is on and falls after a stop. The **Simulation** binary sensor is on while this mode is active.
 
 ## Tests
 

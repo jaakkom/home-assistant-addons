@@ -1,8 +1,12 @@
 import unittest
 
 from autoterm_flow5.protocol import (
+    DEV_HEATER,
+    FACTORY_SETTINGS,
     PUBR0,
+    TYPE_SETTINGS,
     classify,
+    decode_heater_settings,
     diagnostic_enable,
     diagnostic_request,
     Framer,
@@ -10,7 +14,11 @@ from autoterm_flow5.protocol import (
     crc16_modbus,
     decode_extended,
     decode_status,
+    heater_settings_view,
+    patch_heater_settings,
     requested_temperature,
+    settings_request,
+    settings_write,
     start_preheat,
     start_thermostat,
     status_request,
@@ -158,6 +166,41 @@ class StatusTests(unittest.TestCase):
     def test_pubr0_literal(self):
         self.assertTrue(PUBR0.startswith(bytes.fromhex("aa5055425230")))
         self.assertEqual(PUBR0[-2:].hex(), "0fb0")
+
+
+class SettingsBlockTests(unittest.TestCase):
+    def test_factory_block_round_trip(self):
+        parsed = decode_heater_settings(FACTORY_SETTINGS)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.standby_c, 88)
+        self.assertEqual(parsed.auxiliary_c, 95)
+        self.assertEqual(parsed.relay_c, 40)
+        view = heater_settings_view(parsed)
+        self.assertEqual(view["auxiliary_mode"], "off")
+        self.assertEqual(view["relay_mode"], "auto")
+        self.assertTrue(view["pump_standby"])
+        self.assertTrue(view["alarm_channel"])
+        self.assertFalse(view["pump_with_engine"])
+
+    def test_a_changed_standby_keeps_the_other_bytes(self):
+        updated = patch_heater_settings(FACTORY_SETTINGS, {"coolant_limit": 40})
+        self.assertEqual(updated[0], 40)
+        self.assertEqual(updated[1:], FACTORY_SETTINGS[1:])
+        frame = settings_write(updated)
+        self.assertEqual(frame[4], TYPE_SETTINGS)
+        self.assertEqual(frame[5], 40)
+        request = settings_request()
+        self.assertEqual(request[4], TYPE_SETTINGS)
+        self.assertEqual(request[2:4], b"\x00\x00")
+
+    def test_the_reply_is_classified_as_settings(self):
+        raw = build_frame(DEV_HEATER, TYPE_SETTINGS, FACTORY_SETTINGS)
+        parsed = classify(Framer().feed(raw)[0])
+        self.assertEqual(parsed.standby_c, 88)
+
+    def test_a_short_or_wild_block_is_ignored(self):
+        self.assertIsNone(decode_heater_settings(b"\x58"))
+        self.assertIsNone(decode_heater_settings(bytes(9)))
 
 
 if __name__ == "__main__":
