@@ -1,9 +1,9 @@
 """Panel replacement.
 
-In thermostat mode the add-on only switches the heater on and off and
-reports the room temperature. The heater starts, stops, and protects
-itself from that temperature. Preheat and pump modes still use the
-add-on's own limits.
+Thermostat mode follows the comfort panel. The climate card sets the
+requested temperature, and the room sensor is reported as the cabin
+temperature the heater hysterises against. Preheat follows coolant
+temperature instead. Pump mode still uses the add-on's own limits.
 """
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ from .protocol import (
     ExtendedFrame,
     StatusFrame,
     cabin_temperature,
+    requested_temperature,
     start_preheat,
     start_pump,
-    start_thermostat,
     stop_command,
 )
 from .settings import Settings
@@ -105,6 +105,7 @@ class Controller:
         self._cabin_c: int | None = None
         # One thermostat start per time the user switches heating on.
         self._thermostat_on = False
+        self._setpoint_c: int | None = None
 
     def set_mode(self, mode: str) -> None:
         if mode in MODES and mode != self.mode:
@@ -124,6 +125,7 @@ class Controller:
             self._preheat_sent = False
             self._pump_sent = False
             self._thermostat_on = False
+            self._setpoint_c = None
             self.demand = True
         elif not enabled and self.heat_enabled:
             self.heat_enabled = False
@@ -194,6 +196,7 @@ class Controller:
             self._run_started_at = None
             self._start_at = None
             self._thermostat_on = False
+            self._setpoint_c = None
         elif self.heat_enabled and (thermostat or not self.lockout):
             if phase in ACTIVE and self._run_started_at is None:
                 self._run_started_at = now
@@ -279,17 +282,24 @@ class Controller:
         voltage: float | None,
         room_age_s: float | None,
     ) -> list[bytes]:
-        # The cabin-temperature report is what the heater regulates from.
-        # One start enters that mode. The heater then starts, stops, and
-        # applies its own limits. A later idle state is its decision.
+        # Comfort-panel mode. The card's requested temperature is the heater
+        # setpoint, and the cabin report is the room sensor it hysterises
+        # against. Preheat is the other mode: that one follows coolant.
+        # One request is sent when heating is switched on, including when the
+        # burner is already running, and again only when the card value changes.
+        # Returning to idle does not send it again.
         del fresh, fault, coolant, voltage, room_age_s
-        if phase == "idle" and not self._thermostat_on:
-            self._thermostat_on = True
+        target = max(0, min(40, int(round(self.settings.room_target))))
+        if self._thermostat_on and self._setpoint_c == target:
+            return []
+        starting = phase == "idle" and not self._thermostat_on
+        self._thermostat_on = True
+        self._setpoint_c = target
+        if starting:
             self._run_started_at = now
             self._start_at = now
             self._stop_reason = None
-            return [start_thermostat()]
-        return []
+        return [requested_temperature(target)]
 
     def _note_unexpected_stop(self, now: float, coolant: float | None) -> None:
         """The burner left an active phase with no fault and no stop from us.

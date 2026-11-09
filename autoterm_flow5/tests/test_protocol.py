@@ -10,6 +10,7 @@ from autoterm_flow5.protocol import (
     crc16_modbus,
     decode_extended,
     decode_status,
+    requested_temperature,
     start_preheat,
     start_thermostat,
     status_request,
@@ -35,9 +36,12 @@ class CrcTests(unittest.TestCase):
         self.assertEqual(long[0][5:7].hex(), "0078")
 
     def test_thermostat_marker(self):
-        frame = start_thermostat()
+        frame = requested_temperature(34)
         self.assertEqual(frame[4], 0x01)
         self.assertEqual(frame[5:7].hex(), "0022")
+        self.assertEqual(start_thermostat(20)[5:7].hex(), "0014")
+        self.assertEqual(requested_temperature(80)[5:7].hex(), "0028")
+        self.assertEqual(requested_temperature(-5)[5:7].hex(), "0000")
 
 
 class FramerRepairTests(unittest.TestCase):

@@ -54,6 +54,7 @@ class PanelTests(unittest.TestCase):
         self.assertIn('const PREFIX = "/api/hassio_ingress/abc"', body)
         self.assertIn("Tallenna", body)
         self.assertIn("Liekki", body)
+        self.assertIn("Pyyntilämpötila", body)
         self.assertIn("function panelRoot", body)
         self.assertIn('id="heat"', body)
         self.assertTrue(command_accepted("debug", "ON"))

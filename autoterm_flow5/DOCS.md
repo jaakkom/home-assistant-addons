@@ -22,11 +22,13 @@ The official Mosquitto broker is required so entities appear through MQTT discov
 
 ## Control
 
-The climate entity and the heating switch only turn thermostat mode on and off. Heating does not start when the add-on boots. Restarting the add-on leaves a burner that is already running alone: it does not send stop, and it does not send a new start. Turning heating on sends start. Turning it off sends stop once, and again about every five seconds only while the burner is still running.
+Thermostat mode is the comfort-panel mode. Flow 5 regulates its power from the room sensor and the requested temperature, with its own hysteresis. Preheat is separate: that mode follows the coolant temperature and does not use the room sensor.
 
-Room temperature comes from Home Assistant sensors. Enter them on the add-on configuration page, for example `sensor.analog_input_8`. That list is read on every start. The coldest reading is used by default. That reading is sent to the heater as the panel cabin temperature, when it changes and about every thirty seconds. The heater uses it to start, stop, and protect itself. The add-on does not send stop because the room, the coolant, or the voltage reached a limit, and it does not start the burner again after the heater has stopped on its own.
+The climate card's target is the requested temperature. It is sent when heating is switched on, including when the burner is already running, and again whenever the card value changes. The same value is not sent again just because the heater returns to idle. Turning heating off sends stop once, and again about every five seconds only while the burner is still running. Heating does not start when the add-on boots. Restarting the add-on does not send stop. If the heating switch is already on, the card's requested temperature is sent once.
 
-The coolant limit, room drop, and room rise are not written to the heater. No confirmed frame exists for those stored setpoints. Preheat and pump modes still use the add-on's coolant and voltage limits.
+Room temperature comes from Home Assistant sensors. Enter them on the add-on configuration page, for example `sensor.analog_input_8`. That list is read on every start. The coldest reading is used by default. That reading is sent to the heater as the comfort panel's cabin temperature, when it changes and about every thirty seconds. The add-on does not send stop because the room, the coolant, or the voltage reached a limit, and it does not start the burner again after the heater has stopped on its own.
+
+The coolant limit, room drop, and room rise are not written to the heater. Preheat and pump modes still use the add-on's coolant and voltage limits.
 
 There is no power-level command. Low, middle, and high are the heater's own stages and are published as sensors.
 
