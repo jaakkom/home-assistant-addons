@@ -94,6 +94,7 @@ class Controller:
         # True only after the user turns heating off. A fresh process must not
         # stop a burner that is already running.
         self._stop_requested = False
+        self._stop_sent_at: float | None = None
         self._start_at: float | None = None
         self._preheat_sent = False
         self._pump_sent = False
@@ -118,6 +119,7 @@ class Controller:
             self._stop_reason = None
             self._stop_pending = False
             self._stop_requested = False
+            self._stop_sent_at = None
             self._start_at = None
             self._preheat_sent = False
             self._pump_sent = False
@@ -174,9 +176,21 @@ class Controller:
             self.demand = False
 
         thermostat = self.mode == "thermostat"
-        if self._stop_pending or (self._stop_requested and phase in ACTIVE):
+        if phase not in ACTIVE:
+            # Cooldown and idle are the heater's own stop. Do not keep sending it.
+            self._stop_requested = False
+        retry_stop = (
+            self._stop_requested
+            and phase in ACTIVE
+            and (self._stop_sent_at is None or now - self._stop_sent_at >= 5)
+        )
+        # One stop, then at most one retry every five seconds while the burner
+        # is still running. A stop on every poll is what silenced telemetry
+        # from 13:26:58 to 13:27:48.
+        if self._stop_pending or retry_stop:
             commands.append(stop_command())
             self._stop_pending = False
+            self._stop_sent_at = now
             self._run_started_at = None
             self._start_at = None
             self._thermostat_on = False

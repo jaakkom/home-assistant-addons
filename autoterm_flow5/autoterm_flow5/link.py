@@ -18,6 +18,7 @@ from .protocol import (
     StatusFrame,
     classify,
     diagnostic_enable,
+    diagnostic_request,
     parameter_pending,
     status_request,
 )
@@ -27,6 +28,11 @@ HANDSHAKE_INTERVAL_S = 60.0
 HANDSHAKE_RETRY_S = 5.0
 # Ask again once a valid parameter frame has been missing for a while.
 ENABLE_AGAIN_S = 15.0
+# Official tester timer. It does not start the stream. It is the only write
+# while the stream is up, and only on a poll that heard nothing.
+KEEPALIVE_S = 8.0
+# Diagnostic mode again only after the keepalive has already had its turn.
+STREAM_RECOVER_S = 30.0
 # One parameter frame does not mean the stream is still on the wire.
 # Fifteen seconds of silence is the link timeout, so the heater looks lost
 # and a start command has nowhere to land.
@@ -73,6 +79,7 @@ class SerialLink:
         # another diagnostic enable. Until a parameter frame exists, that
         # enable stays ahead of a routine temperature report.
         self._after_control = False
+        self.last_keepalive_at: float | None = None
 
     def close(self) -> None:
         """Release the port before another open. A second handle makes reads fail."""
@@ -157,6 +164,14 @@ class SerialLink:
         if self._needs_handshake(now) and not noisy and not self._stream_busy(now):
             self._write(diagnostic_enable())
             self.last_handshake_at = now
+            self._drain(now)
+            self._held = rest
+            self.bad_crc = self.framer.bad_crc - bad_before
+            return
+        if self._keepalive_due(now) and not noisy:
+            self._write(diagnostic_request())
+            self.last_keepalive_at = now
+            LOG.info("Sent telemetry keepalive")
             self._drain(now)
             self._held = rest
             self.bad_crc = self.framer.bad_crc - bad_before
@@ -246,17 +261,34 @@ class SerialLink:
             return False
         # A status reply is not the parameter stream. Keep asking until a
         # checksum-valid frame arrives. A single bad header must not pause this.
-        if self._stream_busy(now):
-            return False
-        if self.last_extended_at is not None:
-            interval = ENABLE_AGAIN_S
-        else:
-            interval = HANDSHAKE_RETRY_S
-        if self.last_handshake_at is not None and now - self.last_handshake_at < interval:
+        # Bytes already on the wire are not a place to write the enable again.
+        if self._stream_busy(now) or self.rx_bytes or self.framer.pending:
             return False
         if self.last_extended_at is None:
+            if self.last_handshake_at is not None and now - self.last_handshake_at < HANDSHAKE_RETRY_S:
+                return False
             return True
-        return now - self.last_extended_at >= ENABLE_AGAIN_S
+        # One frame already started the stream. Asking again fifteen seconds
+        # later is what cut the next frame in the 13:20 log. The keepalive
+        # owns that gap. Enable is only the recovery after it has failed.
+        if now - self.last_extended_at < STREAM_RECOVER_S:
+            return False
+        if self.last_keepalive_at is None or self.last_keepalive_at < self.last_extended_at:
+            return False
+        if self.last_handshake_at is not None and now - self.last_handshake_at < STREAM_RECOVER_S:
+            return False
+        return True
+
+    def _keepalive_due(self, now: float) -> bool:
+        """Official 8 s timer, and only when this poll heard nothing."""
+        if not self.extended_telemetry or self.last_extended_at is None:
+            return False
+        if self.rx_bytes or self.framer.pending or self._stream_busy(now):
+            return False
+        if self.last_handshake_at == now:
+            return False
+        anchor = self.last_keepalive_at if self.last_keepalive_at is not None else self.last_extended_at
+        return now - anchor >= KEEPALIVE_S
 
     def _telemetry_recent(self, now: float) -> bool:
         """A parameter frame arrived recently. Status would be written into the next one."""
@@ -268,18 +300,13 @@ class SerialLink:
     def _status_due(self, now: float) -> bool:
         # A status poll in the gap still overlaps the next parameter frame.
         # Mode, voltage, pump, and flame already come from that frame.
-        # The enable command needs the rest of this poll to itself. One valid
-        # frame used to be followed by a status poll eight seconds later, and
-        # the stream then stopped.
+        # Once a checksum-valid frame has arrived, status is not asked again.
+        # The 13:20 log got one frame, then a status poll, then the link died.
         if self._stream_busy(now) or self.last_handshake_at == now or self._telemetry_recent(now):
             return False
-        if not self.extended_telemetry or self.last_extended_at is None:
-            return True
-        if now - self.last_extended_at >= ENABLE_AGAIN_S:
-            return True
-        if self.last_status_at is None:
-            return True
-        return now - self.last_status_at >= STATUS_PERIOD_S
+        if self.extended_telemetry and self.last_extended_at is not None:
+            return False
+        return True
 
     def _drain(self, now: float, patient: bool = False) -> None:
         """Read until the line is idle and no half-received frame remains.
@@ -445,6 +472,7 @@ class LinkProgress:
         self.announced_online = False
         self.warned_silent = False
         self.opened_at: float | None = None
+        self.last_mode = ""
 
     def opened(self, now: float) -> None:
         self.opened_at = now
