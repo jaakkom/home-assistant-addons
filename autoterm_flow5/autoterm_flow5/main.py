@@ -125,7 +125,11 @@ def run() -> None:
                     link = open_link(settings, serial_path, baud)
                     progress.opened(now)
                     if not settings.simulate:
-                        LOG.info("Opened %s @ %s, waiting for a status frame", serial_path, baud)
+                        LOG.info(
+                            "Opened %s @ %s, DTR and RTS off, waiting for a status frame",
+                            serial_path,
+                            baud,
+                        )
                 except Exception as exc:  # serial port missing or busy
                     LOG.warning("Could not open the serial port: %s", exc)
                     _publish_offline(client, controller, fuel, settings, last_room, panel)

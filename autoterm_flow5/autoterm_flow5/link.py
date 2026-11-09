@@ -6,6 +6,11 @@ from typing import BinaryIO
 
 from .protocol import (
     HEADER_LEN,
+    PREAMBLE,
+    TYPE_PREHEAT_DURATION,
+    TYPE_PUMP,
+    TYPE_START,
+    TYPE_STOP,
     ExtendedFrame,
     Framer,
     StatusFrame,
@@ -54,6 +59,8 @@ class SerialLink:
         self._held: list[bytes] = []
         # Last time a parameter frame was on the wire, even with a bad checksum.
         self.last_parameter_at: float | None = None
+        # Last time the port returned any bytes, including a frame we could not classify.
+        self.last_rx_at: float | None = None
         self.last_payload_length: int | None = None
 
     def close(self) -> None:
@@ -91,13 +98,19 @@ class SerialLink:
         noisy = self.framer.bad_crc > bad_before and self._extended_count == extended_before
         # A partial frame that gained no bytes this poll will not finish.
         # Holding the user's start or stop behind it is what makes the button late.
-        if self.framer.pending and self.rx_bytes == 0 and queued:
+        # Cabin temperature stays queued: wiping the partial to send it is what
+        # cut the next parameter frame in the 11:58 log.
+        if (
+            self.framer.pending
+            and self.rx_bytes == 0
+            and any(_control_command(item) for item in queued)
+        ):
             self.framer.reset()
         if self.framer.pending:
             self._held = queued
             self.bad_crc = self.framer.bad_crc - bad_before
             return
-        if self._needs_handshake(now) and not noisy and not self._stream_busy(now):
+        if self._needs_handshake(now) and not noisy and not self._line_busy(now):
             self._write(diagnostic_enable())
             self.last_handshake_at = now
             self._drain(now)
@@ -111,11 +124,18 @@ class SerialLink:
                 self._held = queued[index:]
                 blocked = True
                 break
+            # Start and stop still go out after a finished frame. Cabin temperature
+            # waits for a checksum-valid parameter frame: the tester never writes
+            # it into a stream whose next header is still missing.
+            if not _control_command(command) and not self._report_gap(now, noisy):
+                self._held = queued[index:]
+                blocked = True
+                break
             self._write(command)
             self._drain(now)
             # One command in a gap. A second write, or a status poll, lands in
             # the next parameter frame. Checksums then fail until we stop talking.
-            if self.framer.pending or noisy or self._stream_busy(now):
+            if self.framer.pending or noisy or self._line_busy(now):
                 self._held = queued[index + 1 :]
                 blocked = True
                 break
@@ -152,13 +172,41 @@ class SerialLink:
         """
         return self.last_parameter_at is not None and now - self.last_parameter_at < ENABLE_AGAIN_S
 
+    def _line_busy(self, now: float) -> bool:
+        """Bytes have arrived recently, even when none of them formed a known frame.
+
+        The 11:58 log wrote the enable command and the status request after the
+        bad parameter header had aged out, while the heater was still talking.
+        """
+        if self._stream_busy(now):
+            return True
+        return self.last_rx_at is not None and now - self.last_rx_at < ENABLE_AGAIN_S
+
+    def _report_gap(self, now: float, noisy: bool) -> bool:
+        """True when a cabin-temperature report can be written without cutting a frame."""
+        if noisy:
+            return False
+        if self.last_extended_at == now:
+            return True
+        if self.rx_bytes > 0:
+            return False
+        return not self._line_busy(now)
+
+    def _heard_recently(self, now: float) -> bool:
+        return self.last_rx_at is not None and now - self.last_rx_at <= LINK_TIMEOUT_S
+
     def _needs_handshake(self, now: float) -> bool:
         if not self.extended_telemetry:
             return False
-        # Bad checksums still mean diagnostic mode is on. Asking again collides.
-        if self._stream_busy(now):
+        # Bad checksums, and any other bytes, still mean the line is in use.
+        if self._line_busy(now):
             return False
-        interval = ENABLE_AGAIN_S if self.last_extended_at is not None else HANDSHAKE_RETRY_S
+        # Five seconds is only for a silent port. Once bytes have been heard,
+        # wait until they have been gone for fifteen seconds.
+        if self.last_extended_at is not None or self.last_rx_at is not None:
+            interval = ENABLE_AGAIN_S
+        else:
+            interval = HANDSHAKE_RETRY_S
         if self.last_handshake_at is not None and now - self.last_handshake_at < interval:
             return False
         if self.last_extended_at is None:
@@ -168,7 +216,7 @@ class SerialLink:
     def _status_due(self, now: float) -> bool:
         # A status poll in the gap still overlaps the next parameter frame.
         # Mode, voltage, pump, and flame already come from that frame.
-        if self._stream_busy(now):
+        if self._line_busy(now):
             return False
         if not self.extended_telemetry or self.last_extended_at is None:
             return True
@@ -192,10 +240,14 @@ class SerialLink:
             data = _read_port(self.port)
             if data is None:
                 self._empty_reads += 1
-                # Reopening here throws away a parameter frame that was one
-                # read short of finishing.
-                hold = self.rx_bytes > 0 and parameter_pending(self.framer.peek(HEADER_LEN))
-                if self._empty_reads >= 3 and not self._status_is_recent(now) and not hold:
+                # Reopening throws away the kernel buffer and pulses the lines.
+                # A glitch on the next poll is the same adapter, not a new one,
+                # while bytes have arrived within the link timeout.
+                if (
+                    self._empty_reads >= 3
+                    and not self._status_is_recent(now)
+                    and not self._heard_recently(now)
+                ):
                     raise ConnectionError("serial port returned no data")
                 if self._status_is_recent(now):
                     return
@@ -209,6 +261,7 @@ class SerialLink:
                 continue
             quiet = 0
             self._empty_reads = 0
+            self.last_rx_at = now
             self.rx_bytes += len(data)
             if len(self.rx_preview) < 80:
                 self.rx_preview += data[: 80 - len(self.rx_preview)]
@@ -261,18 +314,37 @@ class SerialLink:
 
 
 def open_port(path: str, baud: int):
+    """Open 2400 8N1 the way Autoterm Test does.
+
+    The tester's form disables DTR and RTS and leaves XON/XOFF off. pyserial
+    holds both lines on after open, and this heater then drops bytes from the
+    parameter frame even when the add-on writes nothing.
+    """
     import serial
 
-    return serial.Serial(
-        path,
-        baudrate=baud,
-        bytesize=serial.EIGHTBITS,
-        parity=serial.PARITY_NONE,
-        stopbits=serial.STOPBITS_ONE,
-        timeout=0.3,
-        write_timeout=1.0,
-        exclusive=True,
-    )
+    port = serial.Serial()
+    port.port = path
+    port.baudrate = baud
+    port.bytesize = serial.EIGHTBITS
+    port.parity = serial.PARITY_NONE
+    port.stopbits = serial.STOPBITS_ONE
+    port.timeout = 0.3
+    port.write_timeout = 1.0
+    port.exclusive = True
+    port.xonxoff = False
+    port.rtscts = False
+    port.dsrdtr = False
+    port.dtr = False
+    port.rts = False
+    port.open()
+    return port
+
+
+def _control_command(command: bytes) -> bool:
+    """Start, stop, and pump. The cabin-temperature report can wait."""
+    if len(command) < HEADER_LEN or command[0] != PREAMBLE:
+        return False
+    return command[4] in (TYPE_START, TYPE_STOP, TYPE_PUMP, TYPE_PREHEAT_DURATION)
 
 
 class LinkProgress:
