@@ -5,11 +5,13 @@ from __future__ import annotations
 from typing import BinaryIO
 
 from .protocol import (
+    HEADER_LEN,
     ExtendedFrame,
     Framer,
     StatusFrame,
     classify,
     diagnostic_enable,
+    parameter_pending,
     status_request,
 )
 
@@ -127,7 +129,11 @@ class SerialLink:
         self.port.write(data)
 
     def _note_parameter(self, now: float) -> None:
-        if self.last_extended_at == now or any(note.startswith("02/01/") for note in self.framer.bad_frames):
+        if (
+            self.last_extended_at == now
+            or any(note.startswith("02/01/") for note in self.framer.bad_frames)
+            or parameter_pending(self.framer.peek(HEADER_LEN))
+        ):
             self.last_parameter_at = now
 
     def _first_listen(self) -> bool:
@@ -160,14 +166,10 @@ class SerialLink:
         return now - self.last_extended_at >= ENABLE_AGAIN_S
 
     def _status_due(self, now: float) -> bool:
-        if self._stream_busy(now) and self.last_extended_at != now:
-            # A gap with nothing heard can take one status poll. Bytes on the
-            # wire mean the parameter frame is still in progress.
-            if self.rx_bytes > 0:
-                return False
-            if self.last_status_at is None:
-                return False
-            return now - self.last_status_at >= STATUS_PERIOD_S
+        # A status poll in the gap still overlaps the next parameter frame.
+        # Mode, voltage, pump, and flame already come from that frame.
+        if self._stream_busy(now):
+            return False
         if not self.extended_telemetry or self.last_extended_at is None:
             return True
         if now - self.last_extended_at >= ENABLE_AGAIN_S:
@@ -190,7 +192,10 @@ class SerialLink:
             data = _read_port(self.port)
             if data is None:
                 self._empty_reads += 1
-                if self._empty_reads >= 3 and not self._status_is_recent(now):
+                # Reopening here throws away a parameter frame that was one
+                # read short of finishing.
+                hold = self.rx_bytes > 0 and parameter_pending(self.framer.peek(HEADER_LEN))
+                if self._empty_reads >= 3 and not self._status_is_recent(now) and not hold:
                     raise ConnectionError("serial port returned no data")
                 if self._status_is_recent(now):
                     return
