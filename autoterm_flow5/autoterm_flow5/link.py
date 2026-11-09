@@ -48,6 +48,9 @@ class SerialLink:
         self._empty_reads = 0
         self._extended_count = 0
         self._held: list[bytes] = []
+        # Last time a parameter frame was on the wire, even with a bad checksum.
+        self.last_parameter_at: float | None = None
+        self.last_payload_length: int | None = None
 
     def close(self) -> None:
         """Release the port before another open. A second handle makes reads fail."""
@@ -75,11 +78,15 @@ class SerialLink:
         extended_before = self._extended_count
         self._drain(now)
         noisy = self.framer.bad_crc > bad_before and self._extended_count == extended_before
+        # A partial frame that gained no bytes this poll will not finish.
+        # Holding the user's start or stop behind it is what makes the button late.
+        if self.framer.pending and self.rx_bytes == 0 and queued:
+            self.framer.reset()
         if self.framer.pending:
             self._held = queued
             self.bad_crc = self.framer.bad_crc - bad_before
             return
-        if self._needs_handshake(now):
+        if self._needs_handshake(now) and not noisy and not self._stream_busy(now):
             self.port.write(diagnostic_enable())
             self.last_handshake_at = now
             self._drain(now)
@@ -95,7 +102,9 @@ class SerialLink:
                 break
             self.port.write(command)
             self._drain(now)
-            if self.framer.pending:
+            # One command in a gap. A second write, or a status poll, lands in
+            # the next parameter frame. Checksums then fail until we stop talking.
+            if self.framer.pending or noisy or self._stream_busy(now):
                 self._held = queued[index + 1 :]
                 blocked = True
                 break
@@ -104,8 +113,19 @@ class SerialLink:
             self._drain(now)
         self.bad_crc = self.framer.bad_crc - bad_before
 
+    def _note_parameter(self, now: float) -> None:
+        if self.last_extended_at == now or any(note.startswith("02/01/") for note in self.framer.bad_frames):
+            self.last_parameter_at = now
+
+    def _stream_busy(self, now: float) -> bool:
+        """Parameter frames are arriving. Another request would be written into them."""
+        return self.last_parameter_at is not None and now - self.last_parameter_at < 3
+
     def _needs_handshake(self, now: float) -> bool:
         if not self.extended_telemetry:
+            return False
+        # Bad checksums still mean diagnostic mode is on. Asking again collides.
+        if self._stream_busy(now):
             return False
         interval = ENABLE_AGAIN_S if self.last_extended_at is not None else HANDSHAKE_RETRY_S
         if self.last_handshake_at is not None and now - self.last_handshake_at < interval:
@@ -115,6 +135,8 @@ class SerialLink:
         return now - self.last_extended_at >= ENABLE_AGAIN_S
 
     def _status_due(self, now: float) -> bool:
+        if self._stream_busy(now) and self.last_extended_at != now:
+            return False
         if not self.extended_telemetry or self.last_extended_at is None:
             return True
         if now - self.last_extended_at >= ENABLE_AGAIN_S:
@@ -150,10 +172,11 @@ class SerialLink:
             self._empty_reads = 0
             self.rx_bytes += len(data)
             self._consume(now, data)
+            self._note_parameter(now)
             if (
-                self.last_extended_at == now
-                and self.framer.pending == 0
+                self.framer.pending == 0
                 and not _port_waiting(self.port)
+                and (self.last_extended_at == now or self.last_parameter_at == now)
             ):
                 return
 
@@ -177,13 +200,15 @@ class SerialLink:
             elif isinstance(parsed, ExtendedFrame):
                 self.extended = parsed
                 self.last_extended_at = now
+                self.last_payload_length = frame.length
                 self._extended_count += 1
         return found_status
 
     def online(self, now: float) -> bool:
         heard = self.last_status_at
-        if self.last_extended_at is not None and (heard is None or self.last_extended_at > heard):
-            heard = self.last_extended_at
+        for stamp in (self.last_extended_at, self.last_parameter_at):
+            if stamp is not None and (heard is None or stamp > heard):
+                heard = stamp
         return heard is not None and now - heard <= LINK_TIMEOUT_S
 
     def telemetry_stale(self, now: float) -> bool:
@@ -257,7 +282,7 @@ class TelemetryLog:
             self._mode = None
             return []
         lines: list[tuple[str, str]] = []
-        mode = link.status.mode_name if link.status is not None else None
+        mode = _observed_mode(link)
         mode_changed = mode is not None and mode != self._mode
         if mode_changed:
             self._mode = mode
@@ -279,7 +304,8 @@ class TelemetryLog:
             lines.append(
                 (
                     "info",
-                    f"58-byte telemetry ok: {frame.mode_name}, {frame.voltage:.2f} V, "
+                    f"telemetry ok ({link.last_payload_length or 58} B): {frame.mode_name}, "
+                    f"{frame.voltage:.2f} V, "
                     f"pump {frame.pump_hz:.2f} Hz, flame {frame.flame_c:.0f} °C",
                 )
             )
@@ -299,6 +325,19 @@ class TelemetryLog:
             text = f"58-byte telemetry stopped, last frame {age:.0f} s ago"
         lines.append(("warning", f"{text}, {_heard(link)}"))
         return lines
+
+
+def _observed_mode(link: SerialLink) -> str | None:
+    """Mode from whichever frame arrived last."""
+    if (
+        link.extended is not None
+        and link.last_extended_at is not None
+        and (link.last_status_at is None or link.last_extended_at > link.last_status_at)
+    ):
+        return link.extended.mode_name
+    if link.status is not None:
+        return link.status.mode_name
+    return None
 
 
 def _heard(link: SerialLink) -> str:
