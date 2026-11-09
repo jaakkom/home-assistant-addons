@@ -1,8 +1,11 @@
+import sys
 import unittest
+from unittest import mock
 
-from autoterm_flow5.link import LinkProgress, SerialLink, TelemetryLog
+from autoterm_flow5.link import LinkProgress, SerialLink, TelemetryLog, open_port
 from autoterm_flow5.protocol import (
     build_frame,
+    cabin_temperature,
     crc_bytes,
     decode_extended,
     diagnostic_enable,
@@ -296,6 +299,77 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(link.bad_crc, 1)
         self.assertEqual(link.last_extended_at, 5)
         self.assertEqual(port.writes, 0)
+
+    def test_cabin_temperature_waits_for_a_valid_parameter_frame(self):
+        good = build_frame(0x02, 0x01, bytes(56))
+        bad = bytearray(good)
+        bad[-1] ^= 0xFF
+        cabin = cabin_temperature(8)
+        port = FakePort()
+        port.chunks = [bytes(bad)]
+        link = SerialLink(port, extended_telemetry=True)
+        link.last_handshake_at = 0
+        link.poll(1, [cabin])
+        self.assertEqual(port.writes, 0)
+        self.assertEqual(link._held, [cabin])
+        port.chunks = [good]
+        link.poll(2)
+        self.assertEqual(bytes(port.written), cabin)
+
+    def test_bytes_on_the_wire_hold_enable_and_status(self):
+        port = FakePort()
+        port.chunks = [b"\x00" * 20]
+        link = SerialLink(port, extended_telemetry=True)
+        link.poll(1)
+        self.assertEqual(port.writes, 0)
+        link.poll(6)
+        self.assertEqual(port.writes, 0)
+        link.poll(17)
+        self.assertTrue(bytes(port.written).startswith(diagnostic_enable()))
+
+    def test_a_later_read_glitch_does_not_reopen(self):
+        frame = build_frame(0x02, 0x01, bytes(56))
+        port = FakePort()
+        port.chunks = [frame[:40]]
+        link = SerialLink(port, extended_telemetry=True)
+        link.poll(1)
+        pending = link.framer.pending
+        self.assertGreater(pending, 0)
+
+        def fail(_size: int) -> bytes:
+            raise OSError(
+                "device reports readiness to read but returned no data "
+                "(device disconnected or multiple access on port?)"
+            )
+
+        port.read = fail
+        link.poll(8)
+        self.assertEqual(link.framer.pending, pending)
+
+    def test_open_port_disables_dtr_and_rts(self):
+        class Port:
+            def __init__(self) -> None:
+                self.dtr = True
+                self.rts = True
+                self.xonxoff = True
+                self.rtscts = True
+                self.dsrdtr = True
+                self.at_open = None
+
+            def open(self) -> None:
+                self.at_open = (self.dtr, self.rts, self.xonxoff, self.rtscts, self.dsrdtr)
+
+        serial = mock.Mock()
+        serial.EIGHTBITS = 8
+        serial.PARITY_NONE = "N"
+        serial.STOPBITS_ONE = 1
+        serial.Serial.side_effect = lambda: Port()
+        with mock.patch.dict(sys.modules, {"serial": serial}):
+            port = open_port("/dev/ttyUSB0", 2400)
+        self.assertEqual(port.at_open, (False, False, False, False, False))
+        self.assertEqual(port.baudrate, 2400)
+        self.assertEqual(port.port, "/dev/ttyUSB0")
+        self.assertTrue(port.exclusive)
 
     def test_a_broken_parameter_stream_still_carries_a_start_command(self):
         good = build_frame(0x02, 0x01, bytes(56))
