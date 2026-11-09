@@ -77,7 +77,11 @@ class ControlOutput:
 
 
 class Controller:
-    """Decide the next UART commands. Heating stays off until the user asks."""
+    """Decide the next UART commands. Heating stays off until the user asks.
+
+    A new process does not stop a burner that is already running and does
+    not send a start of its own.
+    """
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings.sanitized()
@@ -90,6 +94,9 @@ class Controller:
         self._stop_reason: str | None = None
         self._stopped_at: float | None = None
         self._stop_pending = False
+        # True only after the user turns heating off. A fresh process must not
+        # stop a burner that is already running.
+        self._stop_requested = False
         self._start_at: float | None = None
         self._preheat_sent = False
         self._pump_sent = False
@@ -111,6 +118,7 @@ class Controller:
             self.heat_enabled = True
             self._stop_reason = None
             self._stop_pending = False
+            self._stop_requested = False
             self._start_at = None
             self._preheat_sent = False
             self._pump_sent = False
@@ -118,6 +126,7 @@ class Controller:
             self.heat_enabled = False
             self.demand = False
             self._stop_pending = True
+            self._stop_requested = True
             self._stop_reason = "user"
             self._stopped_at = now
 
@@ -176,12 +185,14 @@ class Controller:
                 self._cabin_at = now
                 self._cabin_c = reported
 
-        if self._stop_pending or (not self.heat_enabled and phase in ACTIVE):
+        if self._stop_pending or (self._stop_requested and phase in ACTIVE):
             commands.append(stop_command())
             self._stop_pending = False
             self._run_started_at = None
             self._start_at = None
         elif self.heat_enabled and not self.lockout:
+            if phase in ACTIVE and self._run_started_at is None:
+                self._run_started_at = now
             commands.extend(
                 self._mode_commands(now, phase, fresh, fault, coolant, voltage, room_age_s)
             )

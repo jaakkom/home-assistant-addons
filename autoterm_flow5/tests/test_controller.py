@@ -61,6 +61,19 @@ class ControllerTests(unittest.TestCase):
         self.assertNotIn(start_thermostat(), commands_of(output))
         self.assertFalse(output.heat_enabled)
 
+    def test_restart_does_not_stop_or_restart_a_running_heater(self):
+        controller = Controller(self.settings())
+        running = controller.tick(0, status(3, 2, coolant=50), None, 15, 0)
+        self.assertNotIn(stop_command(), commands_of(running))
+        self.assertNotIn(start_thermostat(), commands_of(running))
+        ignition = controller.tick(1, status(2, 1, coolant=40), None, 15, 0)
+        self.assertNotIn(stop_command(), commands_of(ignition))
+        self.assertNotIn(start_thermostat(), commands_of(ignition))
+        controller.set_heat(True, 2)
+        held = controller.tick(2, status(3, 2, coolant=50), None, 15, 0)
+        self.assertNotIn(start_thermostat(), commands_of(held))
+        self.assertNotIn(stop_command(), commands_of(held))
+
     def test_missing_sensor_does_not_start(self):
         controller = Controller(self.settings())
         controller.set_heat(True, 0)
