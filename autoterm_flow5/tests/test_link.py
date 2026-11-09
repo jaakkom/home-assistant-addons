@@ -165,6 +165,21 @@ class LinkTests(unittest.TestCase):
         link.poll(5)
         self.assertIn(diagnostic_enable(), bytes(port.written))
 
+    def test_a_live_parameter_frame_stops_the_restart_poll(self):
+        good = build_frame(0x02, 0x01, bytes(56))
+        bad = bytearray(good)
+        bad[-1] ^= 0xFF
+        port = FakePort()
+        port.chunks = [bytes(bad)]
+        link = SerialLink(port, extended_telemetry=True)
+        link.poll(0)
+        self.assertEqual(port.writes, 0)
+        self.assertEqual(link.bad_crc, 1)
+        port.chunks = [bytes(bad)]
+        link.poll(5)
+        self.assertEqual(port.writes, 0)
+        self.assertNotIn(diagnostic_enable(), bytes(port.written))
+
     def test_diagnostic_mode_stays_off_while_frames_arrive(self):
         port = FakePort()
         link = SerialLink(port, extended_telemetry=True)

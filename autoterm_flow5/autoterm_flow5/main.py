@@ -199,7 +199,12 @@ class CycleResult:
 def _log_link(progress: LinkProgress, now: float, online: bool, mode: str, serial_path: str) -> None:
     event = progress.update(now, online)
     if event == "answered":
-        LOG.info("Heater answered: %s", mode or "status")
+        # Parameter bytes can mark the link up before a status frame exists.
+        # "No connection" is that placeholder, not a heater mode.
+        if not mode or mode == "No connection":
+            progress.announced_online = False
+            return
+        LOG.info("Heater answered: %s", mode)
     elif event == "lost":
         LOG.warning("Heater stopped answering on %s", serial_path)
     elif event == "silent":
