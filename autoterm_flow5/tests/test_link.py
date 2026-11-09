@@ -346,30 +346,29 @@ class LinkTests(unittest.TestCase):
         link.poll(8)
         self.assertEqual(link.framer.pending, pending)
 
-    def test_open_port_disables_dtr_and_rts(self):
+    def test_open_port_holds_dtr_and_rts_on(self):
         class Port:
-            def __init__(self) -> None:
-                self.dtr = True
-                self.rts = True
-                self.xonxoff = True
-                self.rtscts = True
-                self.dsrdtr = True
-                self.at_open = None
-
-            def open(self) -> None:
-                self.at_open = (self.dtr, self.rts, self.xonxoff, self.rtscts, self.dsrdtr)
+            def __init__(self, *args, **kwargs) -> None:
+                self.args = args
+                self.kwargs = kwargs
+                self.dtr = False
+                self.rts = False
 
         serial = mock.Mock()
         serial.EIGHTBITS = 8
         serial.PARITY_NONE = "N"
         serial.STOPBITS_ONE = 1
-        serial.Serial.side_effect = lambda: Port()
+        serial.Serial.side_effect = lambda *args, **kwargs: Port(*args, **kwargs)
         with mock.patch.dict(sys.modules, {"serial": serial}):
             port = open_port("/dev/ttyUSB0", 2400)
-        self.assertEqual(port.at_open, (False, False, False, False, False))
-        self.assertEqual(port.baudrate, 2400)
-        self.assertEqual(port.port, "/dev/ttyUSB0")
-        self.assertTrue(port.exclusive)
+        self.assertEqual(port.args, ("/dev/ttyUSB0",))
+        self.assertEqual(port.kwargs["baudrate"], 2400)
+        self.assertTrue(port.kwargs["exclusive"])
+        self.assertFalse(port.kwargs["rtscts"])
+        self.assertFalse(port.kwargs["dsrdtr"])
+        self.assertFalse(port.kwargs["xonxoff"])
+        self.assertTrue(port.dtr)
+        self.assertTrue(port.rts)
 
     def test_a_broken_parameter_stream_still_carries_a_start_command(self):
         good = build_frame(0x02, 0x01, bytes(56))
