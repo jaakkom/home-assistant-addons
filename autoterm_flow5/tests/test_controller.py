@@ -207,8 +207,13 @@ class ControllerTests(unittest.TestCase):
         controller.set_heat(False, 6)
         stopped = controller.tick(6, status(3, 2, coolant=50), None, 15, 0)
         self.assertIn(stop_command(), commands_of(stopped))
-        idle = controller.tick(7, status(coolant=50), None, 15, 0)
+        held = controller.tick(7, status(3, 2, coolant=50), None, 15, 0)
+        self.assertNotIn(stop_command(), commands_of(held))
+        retry = controller.tick(11, status(3, 2, coolant=50), None, 15, 0)
+        self.assertIn(stop_command(), commands_of(retry))
+        idle = controller.tick(12, status(coolant=50), None, 15, 0)
         self.assertNotIn(start_thermostat(), commands_of(idle))
+        self.assertNotIn(stop_command(), commands_of(idle))
 
     def test_preheat_and_pump_restart_after_an_unexpected_shutdown(self):
         preheat = Controller(self.settings(preheat_minutes=30))

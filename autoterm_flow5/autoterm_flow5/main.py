@@ -100,6 +100,8 @@ def run() -> None:
     telemetry_log = TelemetryLog()
     debug_was_on = settings.debug
     announced_telemetry = False
+    last_telemetry_log: float | None = None
+    last_telemetry_mode = ""
     last_diag_log: float | None = None
     last_room: float | None = None
     last_room_at: float | None = None
@@ -179,8 +181,10 @@ def run() -> None:
                 else:
                     LOG.info("Debug: %s", text)
             if link.last_extended_at == now and link.extended is not None:
-                if not announced_telemetry:
-                    frame = link.extended
+                frame = link.extended
+                mode_changed = frame.mode_name != last_telemetry_mode
+                due = last_telemetry_log is None or now - last_telemetry_log >= 30
+                if mode_changed or due or not announced_telemetry:
                     LOG.info(
                         "Telemetry frame: %s, %.2f V, pump %.2f Hz, flame %.0f °C",
                         frame.mode_name,
@@ -188,6 +192,8 @@ def run() -> None:
                         frame.pump_hz,
                         frame.flame_c,
                     )
+                    last_telemetry_log = now
+                    last_telemetry_mode = frame.mode_name
                 announced_telemetry = True
             elif (
                 link.last_handshake_at == now
@@ -232,8 +238,13 @@ def _log_link(progress: LinkProgress, now: float, online: bool, mode: str, seria
             progress.announced_online = False
             return
         LOG.info("Heater answered: %s", mode)
+        progress.last_mode = mode
     elif event == "lost":
+        progress.last_mode = ""
         LOG.warning("Heater stopped answering on %s", serial_path)
+    elif online and mode and mode not in ("", "No connection") and mode != progress.last_mode:
+        progress.last_mode = mode
+        LOG.info("Heater status: %s", mode)
     elif event == "silent":
         LOG.warning("No status frame from the heater on %s", serial_path)
 

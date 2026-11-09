@@ -9,6 +9,7 @@ from autoterm_flow5.protocol import (
     crc_bytes,
     decode_extended,
     diagnostic_enable,
+    diagnostic_request,
     start_thermostat,
     status_request,
 )
@@ -210,10 +211,23 @@ class LinkTests(unittest.TestCase):
         link.last_extended_at = 0
         link.last_handshake_at = 0
         link.poll(8)
+        self.assertEqual(bytes(port.written), diagnostic_request())
         self.assertNotIn(diagnostic_enable(), bytes(port.written))
+        self.assertNotIn(status_request(), bytes(port.written))
         port.written.clear()
         link.poll(60)
-        self.assertTrue(bytes(port.written).startswith(diagnostic_enable()))
+        self.assertEqual(bytes(port.written), diagnostic_enable())
+
+    def test_status_is_not_asked_again_after_a_telemetry_frame(self):
+        port = FakePort()
+        link = SerialLink(port, extended_telemetry=True)
+        link.last_extended_at = 0
+        link.last_handshake_at = 0
+        link.last_status_at = 0
+        link.poll(16)
+        self.assertNotIn(status_request(), bytes(port.written))
+        self.assertNotIn(diagnostic_enable(), bytes(port.written))
+        self.assertIn(diagnostic_request(), bytes(port.written))
 
     def test_status_stays_quiet_while_parameter_frames_arrive(self):
         frame = build_frame(0x02, 0x01, bytes(bytearray(58)))
@@ -352,6 +366,9 @@ class LinkTests(unittest.TestCase):
         port.chunks = [frame]
         link = SerialLink(port, extended_telemetry=True)
         link.poll(1, [cabin])
+        self.assertEqual(bytes(port.written), b"")
+        self.assertEqual(link._held, [cabin])
+        link.poll(2)
         self.assertEqual(bytes(port.written), diagnostic_enable())
         self.assertEqual(link._held, [cabin])
 
