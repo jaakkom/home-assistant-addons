@@ -87,6 +87,15 @@ def crc16_modbus(data: bytes) -> int:
     return crc
 
 
+def _known_frame(dev: int, msg_type: int, length: int) -> bool:
+    """Headers this heater actually sends. Anything else is a slipped byte."""
+    if dev == DEV_EXTENDED and msg_type == TYPE_EXTENDED and length in (56, 58, 72):
+        return True
+    if dev == DEV_HEATER and msg_type == TYPE_STATUS and length == STATUS_LEN:
+        return True
+    return False
+
+
 def crc_bytes(data: bytes) -> bytes:
     """CRC as it appears on the wire: high byte first."""
     return crc16_modbus(data).to_bytes(2, "big")
@@ -225,8 +234,18 @@ class Framer:
                 self.resyncs += 1
                 if len(self.bad_frames) < 6 and len(self._buf) >= HEADER_LEN:
                     self.bad_frames.append(f"{self._buf[1]:02x}/{self._buf[4]:02x}/{length}")
-                del self._buf[:1]
+                # A known header with a bad checksum is still one whole frame.
+                # Dropping a single byte makes the following frame start in the
+                # middle, so every later checksum fails too.
+                if _known_frame(self._buf[1], self._buf[4], length):
+                    del self._buf[:total]
+                else:
+                    del self._buf[:1]
         return frames
+
+    def reset(self) -> None:
+        """Drop a partial frame that is no longer arriving."""
+        self._buf.clear()
 
 
 @dataclass

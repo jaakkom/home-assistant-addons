@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .controller import Controller, phase_of
+from .controller import Controller, _phase_from, phase_of
 from .fuel import FuelMeter
 from .protocol import EXTENDED_LEN, EXTENDED_MAPPED, ExtendedFrame, StatusFrame
 from .settings import Settings
@@ -300,6 +300,8 @@ def collect_state(
     telemetry_stale: bool,
     fan_on: bool,
     frequency_hz: float,
+    status_at: float | None = None,
+    extended_at: float | None = None,
 ) -> dict[str, str]:
     from .fuel import liters_per_hour, milliliters_per_minute
 
@@ -308,9 +310,20 @@ def collect_state(
         fault = status.fault
     elif extended is not None:
         fault = extended.fault
+    newer_extended = (
+        extended is not None
+        and extended_at is not None
+        and (status_at is None or extended_at > status_at)
+    )
+    if newer_extended:
+        mode_name = extended.mode_name
+        phase_name = _phase_from(extended.state, extended.substate)
+    else:
+        mode_name = status.mode_name if status else "No connection"
+        phase_name = phase_of(status)
     values: dict[str, Any] = {
-        "mode": status.mode_name if status else "No connection",
-        "phase": phase_of(status),
+        "mode": mode_name,
+        "phase": phase_name,
         "state_code": status.state if status else "",
         "substate_code": status.substate if status else "",
         "fault_code": fault,

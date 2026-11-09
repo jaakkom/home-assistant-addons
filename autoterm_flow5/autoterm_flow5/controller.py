@@ -40,7 +40,10 @@ def aggregate(values: list[float | None], mode: str) -> float | None:
 def phase_of(status: StatusFrame | None) -> str:
     if status is None:
         return "unknown"
-    state, sub = status.state, status.substate
+    return _phase_from(status.state, status.substate)
+
+
+def _phase_from(state: int, sub: int) -> str:
     if state == 0:
         return "idle"
     if state == 4 or (state == 1 and sub == 0):
@@ -131,13 +134,15 @@ class Controller:
         extended: ExtendedFrame | None,
         room_c: float | None,
         room_age_s: float | None,
+        status_at: float | None = None,
+        extended_at: float | None = None,
     ) -> ControlOutput:
         settings = self.settings
-        phase = phase_of(status)
+        phase = _observed_phase(status, extended, status_at, extended_at)
         commands: list[bytes] = []
         fresh = room_c is not None and room_age_s is not None and room_age_s <= settings.sensor_stale_s
         fault = _fault(status, extended)
-        coolant = _coolant(status, extended)
+        coolant = _coolant(status, extended, status_at, extended_at)
         voltage = extended.voltage if extended is not None else None
 
         if fault in LOCKOUT_CODES:
@@ -164,18 +169,6 @@ class Controller:
         elif not self.heat_enabled or self.mode != "thermostat":
             self.demand = False
 
-        if fresh and room_c is not None:
-            reported = int(round(room_c))
-            due = (
-                self._cabin_at is None
-                or reported != self._cabin_c
-                or now - self._cabin_at >= 30
-            )
-            if due:
-                commands.append(cabin_temperature(reported))
-                self._cabin_at = now
-                self._cabin_c = reported
-
         if self._stop_pending or (not self.heat_enabled and phase in ACTIVE):
             commands.append(stop_command())
             self._stop_pending = False
@@ -189,6 +182,18 @@ class Controller:
             commands.append(stop_command())
             self._run_started_at = None
             self._start_at = None
+
+        if fresh and room_c is not None:
+            reported = int(round(room_c))
+            due = (
+                self._cabin_at is None
+                or reported != self._cabin_c
+                or now - self._cabin_at >= 30
+            )
+            if due:
+                commands.append(cabin_temperature(reported))
+                self._cabin_at = now
+                self._cabin_c = reported
 
         self._phase = phase
         fan_on = coolant is not None and coolant >= settings.fan_temperature
@@ -347,7 +352,29 @@ def _fault(status: StatusFrame | None, extended: ExtendedFrame | None) -> int:
     return 0
 
 
-def _coolant(status: StatusFrame | None, extended: ExtendedFrame | None) -> float | None:
+def _extended_is_newer(status_at: float | None, extended_at: float | None) -> bool:
+    return extended_at is not None and (status_at is None or extended_at > status_at)
+
+
+def _observed_phase(
+    status: StatusFrame | None,
+    extended: ExtendedFrame | None,
+    status_at: float | None,
+    extended_at: float | None,
+) -> str:
+    if extended is not None and _extended_is_newer(status_at, extended_at):
+        return _phase_from(extended.state, extended.substate)
+    return phase_of(status)
+
+
+def _coolant(
+    status: StatusFrame | None,
+    extended: ExtendedFrame | None,
+    status_at: float | None = None,
+    extended_at: float | None = None,
+) -> float | None:
+    if extended is not None and _extended_is_newer(status_at, extended_at):
+        return float(extended.liquid_c)
     if status is not None:
         return status.coolant_c
     if extended is not None:
