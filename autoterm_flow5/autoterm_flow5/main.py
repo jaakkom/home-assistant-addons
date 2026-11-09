@@ -126,7 +126,7 @@ def run() -> None:
                     progress.opened(now)
                     if not settings.simulate:
                         LOG.info(
-                            "Opened %s @ %s, DTR and RTS off, waiting for a status frame",
+                            "Opened %s @ %s, DTR and RTS on, waiting for a status frame",
                             serial_path,
                             baud,
                         )

@@ -314,29 +314,29 @@ class SerialLink:
 
 
 def open_port(path: str, baud: int):
-    """Open 2400 8N1 the way Autoterm Test does.
+    """Open 2400 8N1 with DTR and RTS held on.
 
-    The tester's form disables DTR and RTS and leaves XON/XOFF off. pyserial
-    holds both lines on after open, and this heater then drops bytes from the
-    parameter frame even when the add-on writes nothing.
+    Autoterm Test disables both lines. On this USB-UART that cuts the link:
+    the heater stops answering. The same port answers while the lines stay on.
+    Hardware flow control stays off, so the lines are levels, not handshake.
     """
     import serial
 
-    port = serial.Serial()
-    port.port = path
-    port.baudrate = baud
-    port.bytesize = serial.EIGHTBITS
-    port.parity = serial.PARITY_NONE
-    port.stopbits = serial.STOPBITS_ONE
-    port.timeout = 0.3
-    port.write_timeout = 1.0
-    port.exclusive = True
-    port.xonxoff = False
-    port.rtscts = False
-    port.dsrdtr = False
-    port.dtr = False
-    port.rts = False
-    port.open()
+    port = serial.Serial(
+        path,
+        baudrate=baud,
+        bytesize=serial.EIGHTBITS,
+        parity=serial.PARITY_NONE,
+        stopbits=serial.STOPBITS_ONE,
+        timeout=0.3,
+        write_timeout=1.0,
+        exclusive=True,
+        xonxoff=False,
+        rtscts=False,
+        dsrdtr=False,
+    )
+    port.dtr = True
+    port.rts = True
     return port
 
 
