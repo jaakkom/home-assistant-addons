@@ -181,17 +181,13 @@ class LinkTests(unittest.TestCase):
         port = FakePort()
         link = SerialLink(port, extended_telemetry=True)
         link.poll(0)
-        written = bytes(port.written)
-        self.assertTrue(written.startswith(diagnostic_enable()))
-        self.assertIn(status_request(), written)
-        self.assertLess(written.index(diagnostic_enable()), written.index(status_request()))
+        self.assertEqual(bytes(port.written), diagnostic_enable())
         port.written.clear()
         link.poll(4)
-        self.assertNotIn(diagnostic_enable(), bytes(port.written))
-        self.assertTrue(bytes(port.written).startswith(status_request()))
+        self.assertEqual(bytes(port.written), status_request())
         port.written.clear()
         link.poll(5)
-        self.assertIn(diagnostic_enable(), bytes(port.written))
+        self.assertEqual(bytes(port.written), diagnostic_enable())
 
     def test_a_live_parameter_frame_stops_the_restart_poll(self):
         good = build_frame(0x02, 0x01, bytes(56))
@@ -316,16 +312,24 @@ class LinkTests(unittest.TestCase):
         link.poll(2)
         self.assertEqual(bytes(port.written), cabin)
 
-    def test_bytes_on_the_wire_hold_enable_and_status(self):
+    def test_a_status_reply_does_not_silence_the_next_poll(self):
+        frame = build_frame(0x04, 0x0F, bytes(18))
         port = FakePort()
-        port.chunks = [b"\x00" * 20]
+        port.chunks = [frame]
         link = SerialLink(port, extended_telemetry=True)
+        link.last_handshake_at = 0
         link.poll(1)
-        self.assertEqual(port.writes, 0)
-        link.poll(6)
-        self.assertEqual(port.writes, 0)
-        link.poll(17)
-        self.assertTrue(bytes(port.written).startswith(diagnostic_enable()))
+        self.assertEqual(link.last_status_at, 1)
+        self.assertIn(status_request(), bytes(port.written))
+        self.assertNotIn(diagnostic_enable(), bytes(port.written))
+        port.written.clear()
+        port.chunks = [frame]
+        link.poll(2)
+        self.assertIn(status_request(), bytes(port.written))
+        self.assertEqual(link.last_status_at, 2)
+        port.written.clear()
+        link.poll(5)
+        self.assertEqual(bytes(port.written), diagnostic_enable())
 
     def test_a_later_read_glitch_does_not_reopen(self):
         frame = build_frame(0x02, 0x01, bytes(56))

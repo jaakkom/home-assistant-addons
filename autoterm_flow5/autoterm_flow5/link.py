@@ -87,7 +87,7 @@ class SerialLink:
         self.framer.bad_frames.clear()
         self.framer.bad_notes.clear()
         self.framer.lead = b""
-        queued = self._held + list(commands or [])
+        queued = _order_commands(self._held + list(commands or []))
         self._held = []
         bad_before = self.framer.bad_crc
         extended_before = self._extended_count
@@ -110,7 +110,7 @@ class SerialLink:
             self._held = queued
             self.bad_crc = self.framer.bad_crc - bad_before
             return
-        if self._needs_handshake(now) and not noisy and not self._line_busy(now):
+        if self._needs_handshake(now) and not noisy and not self._stream_busy(now):
             self._write(diagnostic_enable())
             self.last_handshake_at = now
             self._drain(now)
@@ -135,7 +135,7 @@ class SerialLink:
             self._drain(now)
             # One command in a gap. A second write, or a status poll, lands in
             # the next parameter frame. Checksums then fail until we stop talking.
-            if self.framer.pending or noisy or self._line_busy(now):
+            if self.framer.pending or noisy or self._stream_busy(now):
                 self._held = queued[index + 1 :]
                 blocked = True
                 break
@@ -172,25 +172,15 @@ class SerialLink:
         """
         return self.last_parameter_at is not None and now - self.last_parameter_at < ENABLE_AGAIN_S
 
-    def _line_busy(self, now: float) -> bool:
-        """Bytes have arrived recently, even when none of them formed a known frame.
-
-        The 11:58 log wrote the enable command and the status request after the
-        bad parameter header had aged out, while the heater was still talking.
-        """
-        if self._stream_busy(now):
-            return True
-        return self.last_rx_at is not None and now - self.last_rx_at < ENABLE_AGAIN_S
-
     def _report_gap(self, now: float, noisy: bool) -> bool:
         """True when a cabin-temperature report can be written without cutting a frame."""
-        if noisy:
+        if noisy or self.last_handshake_at == now:
             return False
         if self.last_extended_at == now:
             return True
         if self.rx_bytes > 0:
             return False
-        return not self._line_busy(now)
+        return not self._stream_busy(now)
 
     def _heard_recently(self, now: float) -> bool:
         return self.last_rx_at is not None and now - self.last_rx_at <= LINK_TIMEOUT_S
@@ -198,12 +188,10 @@ class SerialLink:
     def _needs_handshake(self, now: float) -> bool:
         if not self.extended_telemetry:
             return False
-        # Bad checksums, and any other bytes, still mean the line is in use.
-        if self._line_busy(now):
+        # A status reply is not the parameter stream. Keep asking until one arrives.
+        if self._stream_busy(now):
             return False
-        # Five seconds is only for a silent port. Once bytes have been heard,
-        # wait until they have been gone for fifteen seconds.
-        if self.last_extended_at is not None or self.last_rx_at is not None:
+        if self.last_extended_at is not None or self.last_parameter_at is not None:
             interval = ENABLE_AGAIN_S
         else:
             interval = HANDSHAKE_RETRY_S
@@ -216,7 +204,10 @@ class SerialLink:
     def _status_due(self, now: float) -> bool:
         # A status poll in the gap still overlaps the next parameter frame.
         # Mode, voltage, pump, and flame already come from that frame.
-        if self._line_busy(now):
+        # The enable command needs the rest of this poll to itself. Writing
+        # status immediately after it was landing on the stream before it started,
+        # and a status reply then silenced the link for fifteen seconds.
+        if self._stream_busy(now) or self.last_handshake_at == now:
             return False
         if not self.extended_telemetry or self.last_extended_at is None:
             return True
@@ -345,6 +336,13 @@ def _control_command(command: bytes) -> bool:
     if len(command) < HEADER_LEN or command[0] != PREAMBLE:
         return False
     return command[4] in (TYPE_START, TYPE_STOP, TYPE_PUMP, TYPE_PREHEAT_DURATION)
+
+
+def _order_commands(commands: list[bytes]) -> list[bytes]:
+    """Start and stop go out before a cabin report that was waiting."""
+    control = [command for command in commands if _control_command(command)]
+    rest = [command for command in commands if not _control_command(command)]
+    return control + rest
 
 
 class LinkProgress:
