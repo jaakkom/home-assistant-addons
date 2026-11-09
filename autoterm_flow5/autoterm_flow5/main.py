@@ -51,6 +51,11 @@ def run() -> None:
     options = load_options()
     settings = load_settings(SETTINGS_PATH, options)
     settings.save(SETTINGS_PATH)
+    entities = settings.entity_ids()
+    if entities:
+        LOG.info("Room temperature sensors: %s", ", ".join(entities))
+    else:
+        LOG.warning("No room temperature sensor is set. Add it under Temperature entities and restart.")
     controller = Controller(settings)
     fuel = FuelMeter(FUEL_PATH, settings.pump_dose_ml)
     if fuel.clamp_to_capacity(settings.tank_capacity_l):
@@ -319,16 +324,28 @@ def _room(
     last_room: float | None,
     last_room_at: float | None,
 ) -> tuple[float | None, float | None, float | None]:
-    if settings.simulate and not settings.entity_ids():
+    entities = settings.entity_ids()
+    if settings.simulate and not entities:
         return settings.simulate_room_c, settings.simulate_room_c, now
-    readings = [
-        read_temperature(entity_id, token, HA_API)
-        for entity_id in settings.entity_ids()
-    ]
+    readings = [read_temperature(entity_id, token, HA_API) for entity_id in entities]
     current = aggregate(readings, settings.aggregation)
     if current is None:
+        if entities and (_room_warned_at is None or now - _room_warned_at >= 60):
+            LOG.warning("Room temperature sensors did not return a number: %s", ", ".join(entities))
+            _remember_room_warning(now)
         return last_room, last_room, last_room_at
+    _remember_room_warning(None)
+    if last_room is None or round(current, 1) != round(last_room, 1):
+        LOG.info("Room temperature %.1f °C from %s", current, ", ".join(entities))
     return current, current, now
+
+
+_room_warned_at: float | None = None
+
+
+def _remember_room_warning(when: float | None) -> None:
+    global _room_warned_at
+    _room_warned_at = when
 
 
 def _current_fault(link: SerialLink) -> int:

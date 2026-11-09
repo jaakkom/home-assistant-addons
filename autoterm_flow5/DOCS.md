@@ -24,7 +24,7 @@ The official Mosquitto broker is required so entities appear through MQTT discov
 
 The climate entity and the heating switch only turn thermostat mode on and off. Heating does not start when the add-on boots. Restarting the add-on leaves a burner that is already running alone: it does not send stop, and it does not send a new start. Turning heating on sends start. Turning it off sends stop once, and again about every five seconds only while the burner is still running.
 
-Room temperature comes from Home Assistant sensors. The coldest reading is used by default. That reading is sent to the heater as the panel cabin temperature, when it changes and about every thirty seconds. The heater uses it to start, stop, and protect itself. The add-on does not send stop because the room, the coolant, or the voltage reached a limit, and it does not start the burner again after the heater has stopped on its own.
+Room temperature comes from Home Assistant sensors. Enter them on the add-on configuration page, for example `sensor.analog_input_8`. That list is read on every start. The coldest reading is used by default. That reading is sent to the heater as the panel cabin temperature, when it changes and about every thirty seconds. The heater uses it to start, stop, and protect itself. The add-on does not send stop because the room, the coolant, or the voltage reached a limit, and it does not start the burner again after the heater has stopped on its own.
 
 The coolant limit, room drop, and room rise are not written to the heater. No confirmed frame exists for those stored setpoints. Preheat and pump modes still use the add-on's coolant and voltage limits.
 
