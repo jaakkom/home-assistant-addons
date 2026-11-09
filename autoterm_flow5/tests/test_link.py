@@ -7,6 +7,7 @@ from autoterm_flow5.protocol import build_frame, decode_extended, diagnostic_ena
 class FakePort:
     def __init__(self, response: bytes = b"") -> None:
         self.written = bytearray()
+        self.writes = 0
         self.response = response
 
     def write(self, data: bytes) -> None:
@@ -112,7 +113,7 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(link.status.mode_name, "Ignition 1")
         self.assertEqual(link.last_extended_at, 5)
         self.assertEqual(link.extended.voltage, 12.5)
-        self.assertEqual(port.writes, 1)
+        self.assertEqual(port.writes, 0)
 
     def test_an_incoming_frame_is_finished_before_the_status_request(self):
         raw = bytearray(58)
@@ -168,6 +169,84 @@ class LinkTests(unittest.TestCase):
         port.written.clear()
         link.poll(60)
         self.assertTrue(bytes(port.written).startswith(diagnostic_enable()))
+
+    def test_status_stays_quiet_while_parameter_frames_arrive(self):
+        frame = build_frame(0x02, 0x01, bytes(bytearray(58)))
+        port = FakePort()
+        port.chunks = [frame]
+        link = SerialLink(port, extended_telemetry=True)
+        link.last_handshake_at = 0
+        link.last_status_at = 9
+        link.last_extended_at = 9
+        link.poll(10)
+        self.assertEqual(link.last_extended_at, 10)
+        self.assertEqual(port.writes, 0)
+
+    def test_status_is_asked_again_after_the_quiet_period(self):
+        frame = build_frame(0x02, 0x01, bytes(bytearray(58)))
+        port = FakePort()
+        port.chunks = [frame]
+        link = SerialLink(port, extended_telemetry=True)
+        link.last_handshake_at = 0
+        link.last_status_at = 0
+        link.last_extended_at = 0
+        link.poll(8)
+        self.assertEqual(port.writes, 1)
+        self.assertIn(status_request(), bytes(port.written))
+
+    def test_a_command_is_its_own_frame(self):
+        port = FakePort()
+        link = SerialLink(port, extended_telemetry=False)
+        command = bytes.fromhex("aa03000003d84f")
+        link.poll(1, [command])
+        self.assertEqual(port.writes, 2)
+        self.assertTrue(bytes(port.written).startswith(command))
+        self.assertIn(status_request(), bytes(port.written))
+
+    def test_a_corrupt_burst_is_not_answered(self):
+        port = FakePort()
+        port.chunks = [bytes.fromhex("aa02040001000000000000")]
+        link = SerialLink(port, extended_telemetry=True)
+        link.last_handshake_at = 0
+        link.last_extended_at = 0
+        link.last_status_at = 0
+        link.poll(10)
+        self.assertGreater(link.bad_crc, 0)
+        self.assertEqual(port.writes, 0)
+        self.assertEqual(link.framer.bad_frames, ["02/01/4"])
+
+    def test_a_command_waits_out_a_partial_frame(self):
+        frame = build_frame(0x02, 0x01, bytes(bytearray(58)))
+        port = FakePort()
+        port.chunks = [frame[:30]]
+        link = SerialLink(port, extended_telemetry=True)
+        link.last_handshake_at = 0
+        link.last_extended_at = 0
+        link.last_status_at = 0
+        command = bytes.fromhex("aa03000003d84f")
+        link.poll(10, [command])
+        self.assertEqual(port.writes, 0)
+        self.assertEqual(link._held, [command])
+        port.chunks = [frame[30:]]
+        link.poll(11)
+        self.assertIn(command, bytes(port.written))
+
+    def test_a_parameter_frame_keeps_the_link_online(self):
+        link = SerialLink(FakePort(), extended_telemetry=True)
+        link.last_extended_at = 0
+        self.assertTrue(link.online(10))
+        self.assertFalse(link.online(16))
+
+    def test_debug_names_a_frame_that_failed_the_checksum(self):
+        port = FakePort()
+        port.chunks = [bytes.fromhex("aa02040001000000000000")]
+        link = SerialLink(port, extended_telemetry=True)
+        link.last_handshake_at = 0
+        link.last_extended_at = 0
+        link.poll(70)
+        lines = TelemetryLog().update(70, True, link)
+        self.assertTrue(lines)
+        self.assertIn("bad 02/01/4", lines[0][1])
 
 
 def _extended_frame():

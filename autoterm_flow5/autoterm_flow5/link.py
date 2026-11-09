@@ -16,6 +16,11 @@ from .protocol import (
 HANDSHAKE_INTERVAL_S = 60.0
 # Until a parameter frame has arrived, repeat the enable command sooner.
 HANDSHAKE_RETRY_S = 5.0
+# Ask again once the stream has actually stopped, without waiting a full minute.
+ENABLE_AGAIN_S = 15.0
+# While the heater is already streaming, a status poll every second lands in
+# the next parameter frame. Eight seconds still tracks mode changes.
+STATUS_PERIOD_S = 8.0
 LINK_TIMEOUT_S = 15.0
 # Keep listening after a request. One 0.3 s read misses a slow reply, and the
 # next request then collides with it.
@@ -41,6 +46,8 @@ class SerialLink:
         self.bad_crc = 0
         self.other_frames: list[str] = []
         self._empty_reads = 0
+        self._extended_count = 0
+        self._held: list[bytes] = []
 
     def close(self) -> None:
         """Release the port before another open. A second handle makes reads fail."""
@@ -56,35 +63,72 @@ class SerialLink:
         """Listen, then ask. The heater transmits the parameter block on its own.
 
         A status request written during that frame breaks the CRC. Finish
-        whatever is already arriving, and only then drive the line.
+        whatever is already arriving, write the next byte at the start of the
+        gap, and stay quiet when the bytes just heard were already corrupt.
         """
         self.rx_bytes = 0
         self.other_frames = []
+        self.framer.bad_frames.clear()
+        queued = self._held + list(commands or [])
+        self._held = []
         bad_before = self.framer.bad_crc
+        extended_before = self._extended_count
         self._drain(now)
+        noisy = self.framer.bad_crc > bad_before and self._extended_count == extended_before
+        if self.framer.pending:
+            self._held = queued
+            self.bad_crc = self.framer.bad_crc - bad_before
+            return
         if self._needs_handshake(now):
             self.port.write(diagnostic_enable())
             self.last_handshake_at = now
             self._drain(now)
-        payload = bytearray(status_request())
-        for command in commands or []:
-            payload.extend(command)
-        self.port.write(payload)
-        self._drain(now)
+            if self.framer.pending:
+                self._held = queued
+                self.bad_crc = self.framer.bad_crc - bad_before
+                return
+        blocked = False
+        for index, command in enumerate(queued):
+            if self.framer.pending:
+                self._held = queued[index:]
+                blocked = True
+                break
+            self.port.write(command)
+            self._drain(now)
+            if self.framer.pending:
+                self._held = queued[index + 1 :]
+                blocked = True
+                break
+        if not blocked and not noisy and not self.framer.pending and self._status_due(now):
+            self.port.write(status_request())
+            self._drain(now)
         self.bad_crc = self.framer.bad_crc - bad_before
 
     def _needs_handshake(self, now: float) -> bool:
         if not self.extended_telemetry:
             return False
-        interval = HANDSHAKE_INTERVAL_S if self.last_extended_at is not None else HANDSHAKE_RETRY_S
+        interval = ENABLE_AGAIN_S if self.last_extended_at is not None else HANDSHAKE_RETRY_S
         if self.last_handshake_at is not None and now - self.last_handshake_at < interval:
             return False
         if self.last_extended_at is None:
             return True
-        return now - self.last_extended_at >= HANDSHAKE_INTERVAL_S
+        return now - self.last_extended_at >= ENABLE_AGAIN_S
+
+    def _status_due(self, now: float) -> bool:
+        if not self.extended_telemetry or self.last_extended_at is None:
+            return True
+        if now - self.last_extended_at >= ENABLE_AGAIN_S:
+            return True
+        if self.last_status_at is None:
+            return True
+        return now - self.last_status_at >= STATUS_PERIOD_S
 
     def _drain(self, now: float) -> None:
-        """Read until the line is idle and no half-received frame remains."""
+        """Read until the line is idle and no half-received frame remains.
+
+        After a whole parameter frame, return at once. Waiting out the read
+        timeout spends the gap, and the next request then hits the following frame.
+        """
         quiet = 0
         for _ in range(REPLY_READS):
             data = _read_port(self.port)
@@ -106,6 +150,12 @@ class SerialLink:
             self._empty_reads = 0
             self.rx_bytes += len(data)
             self._consume(now, data)
+            if (
+                self.last_extended_at == now
+                and self.framer.pending == 0
+                and not _port_waiting(self.port)
+            ):
+                return
 
     def _status_is_recent(self, now: float) -> bool:
         return self.last_status_at is not None and now - self.last_status_at <= STATUS_GAP_S
@@ -127,10 +177,14 @@ class SerialLink:
             elif isinstance(parsed, ExtendedFrame):
                 self.extended = parsed
                 self.last_extended_at = now
+                self._extended_count += 1
         return found_status
 
     def online(self, now: float) -> bool:
-        return self.last_status_at is not None and now - self.last_status_at <= LINK_TIMEOUT_S
+        heard = self.last_status_at
+        if self.last_extended_at is not None and (heard is None or self.last_extended_at > heard):
+            heard = self.last_extended_at
+        return heard is not None and now - heard <= LINK_TIMEOUT_S
 
     def telemetry_stale(self, now: float) -> bool:
         if not self.extended_telemetry:
@@ -252,9 +306,19 @@ def _heard(link: SerialLink) -> str:
     parts = [f"heard {link.rx_bytes} bytes"]
     if link.bad_crc:
         parts.append(f"bad crc {link.bad_crc}")
+    if link.framer.bad_frames:
+        parts.append("bad " + " ".join(link.framer.bad_frames[:4]))
     if link.other_frames:
         parts.append("other " + " ".join(link.other_frames[:4]))
     return ", ".join(parts)
+
+
+def _port_waiting(port: BinaryIO) -> bool:
+    waiting = getattr(port, "in_waiting", 0)
+    try:
+        return int(waiting or 0) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _read_port(port: BinaryIO) -> bytes | None:

@@ -71,6 +71,11 @@ class SimulatedHeater:
         if self.silent:
             self._pending.clear()
             return b""
+        # Once diagnostic mode is on, the heater pushes a frame on its own.
+        if not self._pending and self.extended_enabled:
+            self._advance()
+            self._pending.extend(self._status_frame())
+            self._pending.extend(self._extended_frame())
         data = bytes(self._pending)
         self._pending.clear()
         return data
