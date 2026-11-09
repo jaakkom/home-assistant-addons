@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 
 from .faults import Notice
+
+_NUMBER = re.compile(r"[+-]?\d+(?:[.,]\d+)?")
 
 
 def supervisor_token() -> str:
@@ -22,12 +25,24 @@ def read_temperature(entity_id: str, token: str, base_url: str, timeout: float =
             payload = json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError):
         return None
-    state = payload.get("state")
-    if state in (None, "unknown", "unavailable", ""):
+    return parse_temperature(payload.get("state"))
+
+
+def parse_temperature(state: object) -> float | None:
+    """Read a Home Assistant state that may use a comma or a unit suffix."""
+    if isinstance(state, bool) or state is None:
+        return None
+    if isinstance(state, (int, float)):
+        return float(state)
+    text = str(state).strip()
+    if text.lower() in {"", "unknown", "unavailable", "none"}:
+        return None
+    match = _NUMBER.search(text.replace(" ", ""))
+    if match is None:
         return None
     try:
-        return float(state)
-    except (TypeError, ValueError):
+        return float(match.group(0).replace(",", "."))
+    except ValueError:
         return None
 
 

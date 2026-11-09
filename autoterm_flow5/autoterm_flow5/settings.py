@@ -118,6 +118,11 @@ def load_settings(path: Path, options: dict) -> Settings:
         settings.simulate = seeded.simulate
     if option_is_set(options, "device", "debug"):
         settings.debug = seeded.debug
+    # The entity list has no Home Assistant control. The configuration page
+    # is the only place it can be changed, so a later edit must replace the
+    # list saved on the first start.
+    if option_is_set(options, "temperature", "temperature_entities"):
+        settings.temperature_entities = seeded.temperature_entities
     return settings.sanitized()
 
 

@@ -11,6 +11,7 @@ from autoterm_flow5.fuel import FuelMeter
 from autoterm_flow5.link import SerialLink
 from autoterm_flow5.main import _room, open_link, step
 from autoterm_flow5.mqtt_bridge import PREFIX, apply_command, discovery_messages
+from autoterm_flow5.ha import parse_temperature
 from autoterm_flow5.settings import Settings, load_settings, settings_from_options
 from autoterm_flow5.simulator import SimulatedHeater
 
@@ -83,6 +84,25 @@ class OpenLinkTests(unittest.TestCase):
             path = Path(directory) / "settings.json"
             Settings(simulate=True).save(path)
             self.assertTrue(load_settings(path, {}).simulate)
+
+    def test_configuration_page_replaces_saved_temperature_entities(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            Settings(temperature_entities="", room_target=22).save(path)
+            loaded = load_settings(
+                path,
+                {"temperature": {"temperature_entities": "sensor.analog_input_8"}},
+            )
+            self.assertEqual(loaded.entity_ids(), ["sensor.analog_input_8"])
+            self.assertEqual(loaded.room_target, 22)
+
+    def test_temperature_states_with_a_comma_or_a_unit(self):
+        self.assertEqual(parse_temperature("21.4"), 21.4)
+        self.assertEqual(parse_temperature("21,4"), 21.4)
+        self.assertEqual(parse_temperature("21,4 °C"), 21.4)
+        self.assertEqual(parse_temperature(18), 18.0)
+        self.assertIsNone(parse_temperature("unavailable"))
+        self.assertIsNone(parse_temperature("unknown"))
 
     def test_simulated_room_is_used_when_no_entities_are_set(self):
         settings = Settings(simulate=True, simulate_room_c=16, temperature_entities="")
