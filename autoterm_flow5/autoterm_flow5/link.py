@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import BinaryIO
 
 from .protocol import (
@@ -23,8 +24,12 @@ from .protocol import (
 HANDSHAKE_INTERVAL_S = 60.0
 # Until a parameter frame has arrived, repeat the enable command sooner.
 HANDSHAKE_RETRY_S = 5.0
-# Ask again once the stream has actually stopped, without waiting a full minute.
+# Ask again once a valid parameter frame has been missing for a while.
 ENABLE_AGAIN_S = 15.0
+# One parameter frame does not mean the stream is still on the wire.
+# Fifteen seconds of silence is the link timeout, so the heater looks lost
+# and a start command has nowhere to land.
+STREAM_GAP_S = 2.0
 # While the heater is already streaming, a status poll every second lands in
 # the next parameter frame. Eight seconds still tracks mode changes.
 STATUS_PERIOD_S = 8.0
@@ -36,6 +41,7 @@ STATUS_GAP_S = 30.0
 # pyserial raises this when select says the port is readable and read
 # returns nothing. One such result is an empty poll, not a lost adapter.
 _EMPTY_READ = "returned no data"
+LOG = logging.getLogger("autoterm_flow5")
 
 
 class SerialLink:
@@ -110,35 +116,57 @@ class SerialLink:
             self._held = queued
             self.bad_crc = self.framer.bad_crc - bad_before
             return
+        # Start and stop own the poll. Diagnostic mode or a status request
+        # written behind them is what the heater was ignoring.
+        sent_control = False
+        rest = queued
+        for index, command in enumerate(queued):
+            if not _control_command(command):
+                rest = queued[index:]
+                break
+            self._write(command)
+            _log_control(command)
+            sent_control = True
+            self._drain(now)
+            rest = queued[index + 1 :]
+            break
+        else:
+            rest = []
+        if sent_control and self.extended_telemetry:
+            self._held = rest
+            self.bad_crc = self.framer.bad_crc - bad_before
+            return
         if self._needs_handshake(now) and not noisy and not self._stream_busy(now):
             self._write(diagnostic_enable())
             self.last_handshake_at = now
             self._drain(now)
-            if self.framer.pending:
-                self._held = queued
-                self.bad_crc = self.framer.bad_crc - bad_before
-                return
+            self._held = rest
+            self.bad_crc = self.framer.bad_crc - bad_before
+            return
         blocked = False
-        for index, command in enumerate(queued):
+        for index, command in enumerate(rest):
             if self.framer.pending:
-                self._held = queued[index:]
+                self._held = rest[index:]
                 blocked = True
                 break
-            # Start and stop still go out after a finished frame. Cabin temperature
-            # waits for a checksum-valid parameter frame: the tester never writes
-            # it into a stream whose next header is still missing.
+            # Cabin temperature waits for a checksum-valid parameter frame or a
+            # quiet line. It is not written on top of a frame that already failed.
             if not _control_command(command) and not self._report_gap(now, noisy):
-                self._held = queued[index:]
+                self._held = rest[index:]
                 blocked = True
                 break
             self._write(command)
+            if _control_command(command):
+                _log_control(command)
             self._drain(now)
             # One command in a gap. A second write, or a status poll, lands in
             # the next parameter frame. Checksums then fail until we stop talking.
             if self.framer.pending or noisy or self._stream_busy(now):
-                self._held = queued[index + 1 :]
+                self._held = rest[index + 1 :]
                 blocked = True
                 break
+        else:
+            self._held = []
         if not blocked and not noisy and not self.framer.pending and self._status_due(now):
             self._write(status_request())
             self._drain(now)
@@ -151,7 +179,7 @@ class SerialLink:
     def _note_parameter(self, now: float) -> None:
         if (
             self.last_extended_at == now
-            or any(note.startswith("02/01/") for note in self.framer.bad_frames)
+            or any(_parameter_note(note) for note in self.framer.bad_frames)
             or parameter_pending(self.framer.peek(HEADER_LEN))
         ):
             self.last_parameter_at = now
@@ -170,7 +198,7 @@ class SerialLink:
         Three seconds is shorter than the retry, so a restart kept asking
         diagnostic mode every five seconds and the checksum never recovered.
         """
-        return self.last_parameter_at is not None and now - self.last_parameter_at < ENABLE_AGAIN_S
+        return self.last_parameter_at is not None and now - self.last_parameter_at < STREAM_GAP_S
 
     def _report_gap(self, now: float, noisy: bool) -> bool:
         """True when a cabin-temperature report can be written without cutting a frame."""
@@ -188,10 +216,11 @@ class SerialLink:
     def _needs_handshake(self, now: float) -> bool:
         if not self.extended_telemetry:
             return False
-        # A status reply is not the parameter stream. Keep asking until one arrives.
+        # A status reply is not the parameter stream. Keep asking until a
+        # checksum-valid frame arrives. A single bad header must not pause this.
         if self._stream_busy(now):
             return False
-        if self.last_extended_at is not None or self.last_parameter_at is not None:
+        if self.last_extended_at is not None:
             interval = ENABLE_AGAIN_S
         else:
             interval = HANDSHAKE_RETRY_S
@@ -329,6 +358,30 @@ def open_port(path: str, baud: int):
     port.dtr = True
     port.rts = True
     return port
+
+
+def _parameter_note(note: str) -> bool:
+    """True for a rejected 56, 58, or 72 byte parameter header, not a slipped byte."""
+    kind, _, length = note.partition("/")
+    if kind != "02":
+        return False
+    msg, _, size = length.partition("/")
+    if msg != "01":
+        return False
+    try:
+        return int(size) in (56, 58, 72)
+    except ValueError:
+        return False
+
+
+def _log_control(command: bytes) -> None:
+    kind = {
+        TYPE_START: "start",
+        TYPE_STOP: "stop",
+        TYPE_PUMP: "pump",
+        TYPE_PREHEAT_DURATION: "preheat",
+    }.get(command[4], "command")
+    LOG.info("Sent heater %s", kind)
 
 
 def _control_command(command: bytes) -> bool:

@@ -312,6 +312,27 @@ class LinkTests(unittest.TestCase):
         link.poll(2)
         self.assertEqual(bytes(port.written), cabin)
 
+    def test_one_parameter_frame_does_not_drop_the_link(self):
+        bad = bytearray(build_frame(0x02, 0x01, bytes(56)))
+        bad[-1] ^= 0xFF
+        port = FakePort()
+        port.chunks = [bytes(bad)]
+        link = SerialLink(port, extended_telemetry=True)
+        link.poll(0)
+        self.assertEqual(port.writes, 0)
+        port.written.clear()
+        link.poll(3)
+        self.assertEqual(bytes(port.written), diagnostic_enable())
+        port.written.clear()
+        link.poll(4)
+        self.assertEqual(bytes(port.written), status_request())
+
+    def test_start_is_sent_on_its_own(self):
+        port = FakePort()
+        link = SerialLink(port, extended_telemetry=True)
+        link.poll(10, [start_thermostat()])
+        self.assertEqual(bytes(port.written), start_thermostat())
+
     def test_a_status_reply_does_not_silence_the_next_poll(self):
         frame = build_frame(0x04, 0x0F, bytes(18))
         port = FakePort()
