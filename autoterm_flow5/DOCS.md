@@ -38,7 +38,7 @@ The option page is grouped. Simulation and the device link come first, then temp
 
 ## Sidebar
 
-The add-on serves an ingress page on port 8099. On the add-on page, turn on **Show in sidebar**. Home Assistant then opens the diagnostics and settings page the same way it opens the Terminal & SSH add-on. The page shows the live measurements: temperatures, voltage, pump, flame, fans, fuel, and the raw frame bytes. It refreshes those values in place. Saving a setting writes the same value as the matching Home Assistant entity. Serial port, baud, MQTT, and the simulation switch stay on the add-on configuration page, because changing them needs a restart. The sidebar entry is available to administrators.
+The add-on serves an ingress page on port 8099. On the add-on page, turn on **Show in sidebar**. Home Assistant then opens the diagnostics and settings page the same way it opens the Terminal & SSH add-on. The page shows the live measurements: temperatures, voltage, pump, flame, fans, fuel, and the raw frame bytes. The same values are published to Home Assistant. Coolant temperature comes from the parameter stream's liquid sensor while that stream is running, because the short status frame is not polled then. An empty measurement is not published, so it does not clear a sensor to unknown. It refreshes those values in place. Saving a setting writes the same value as the matching Home Assistant entity. Serial port, baud, MQTT, and the simulation switch stay on the add-on configuration page, because changing them needs a restart. The sidebar entry is available to administrators.
 
 ## Fuel
 
