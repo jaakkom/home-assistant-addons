@@ -275,7 +275,7 @@ class SimulationLoopTests(unittest.TestCase):
         self.heater.burning = False
         idle = self.cycle()
         self.cycle()
-        self.assertEqual(self.heater.events.count("start"), 1)
+        self.assertEqual(self.heater.events.count("start"), 2)
         self.assertEqual(idle.values["fault_code"], "0")
         self.assertEqual(idle.values["burner"], "OFF")
 

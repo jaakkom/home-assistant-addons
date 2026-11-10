@@ -31,6 +31,9 @@ from .settings import Settings
 LOG = logging.getLogger("autoterm_flow5.controller")
 MODES = ("thermostat", "preheat", "pump")
 ACTIVE = frozenset({"starting", "running"})
+# The control unit drops a run that is not refreshed. A start on every poll
+# silences telemetry, so the same request goes out about once a minute.
+SETPOINT_REPEAT_S = 60.0
 DEVICE_SETTING_KEYS = frozenset({
     "coolant_limit",
     "auxiliary_mode",
@@ -119,9 +122,10 @@ class Controller:
         self._circulation_sent = False
         self._cabin_at: float | None = None
         self._cabin_c: int | None = None
-        # One thermostat start per time the user switches heating on.
+        # The thermostat request is repeated while heating stays on.
         self._thermostat_on = False
         self._setpoint_c: int | None = None
+        self._setpoint_at: float | None = None
         self._device_raw: bytes | None = None
         self._settings_dirty: set[str] = set()
         self._settings_pending = False
@@ -151,6 +155,7 @@ class Controller:
             self._pump_sent = False
             self._thermostat_on = False
             self._setpoint_c = None
+            self._setpoint_at = None
             self.demand = True
         elif not enabled and self.heat_enabled:
             self.heat_enabled = False
@@ -338,6 +343,7 @@ class Controller:
             self._start_at = None
             self._thermostat_on = False
             self._setpoint_c = None
+            self._setpoint_at = None
         elif self.heat_enabled and (thermostat or not self.lockout):
             if phase in ACTIVE and self._run_started_at is None:
                 self._run_started_at = now
@@ -427,17 +433,25 @@ class Controller:
         # Comfort-panel mode. The card's requested temperature is the heater
         # setpoint, and the cabin report is the room sensor it hysterises
         # against. Preheat is the other mode: that one follows coolant.
-        # One request is sent when heating is switched on, including when the
-        # burner is already running, and again only when the card value changes.
-        # Returning to idle does not send it again.
-        del fresh, fault, coolant, voltage, room_age_s
+        # The request is sent when heating is switched on, when the card value
+        # changes, about once a minute while the request stays on, and again
+        # if the burner goes out with no fault. A fault is left alone.
+        del fresh, coolant, voltage, room_age_s
+        if fault:
+            return []
+        if phase == "cooldown":
+            return []
         target = max(0, min(40, int(round(self.settings.room_target))))
-        if self._thermostat_on and self._setpoint_c == target:
+        changed = self._setpoint_c != target
+        due = self._setpoint_at is None or now - self._setpoint_at >= SETPOINT_REPEAT_S
+        dropped = phase == "idle" and self._phase in ACTIVE | {"cooldown", "pump"}
+        if self._thermostat_on and not changed and not due and not dropped:
             return []
         starting = phase == "idle" and not self._thermostat_on
         self._thermostat_on = True
         self._setpoint_c = target
-        if starting:
+        self._setpoint_at = now
+        if starting or dropped:
             self._run_started_at = now
             self._start_at = now
             self._stop_reason = None

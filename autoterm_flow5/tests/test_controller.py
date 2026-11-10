@@ -155,7 +155,7 @@ class ControllerTests(unittest.TestCase):
         warm = controller.tick(600, status(3, 2, coolant=50), None, 25, 0)
         self.assertNotIn(stop_command(), commands_of(warm))
         idle = controller.tick(601, status(), None, 15, 0)
-        self.assertNotIn(start_thermostat(), commands_of(idle))
+        self.assertIn(start_thermostat(), commands_of(idle))
 
     def test_thermostat_mode_does_not_stop_for_coolant_or_voltage(self):
         controller = Controller(self.settings(shutdown_voltage=12, shutdown_voltage_s=0))
@@ -212,13 +212,22 @@ class ControllerTests(unittest.TestCase):
         still = controller.tick(31, status(3, 2, coolant=50), extended(11), 15, 0)
         self.assertNotIn(stop_command(), commands_of(still))
 
-    def test_an_idle_return_is_not_started_again(self):
+    def test_a_faultless_stop_sends_the_request_again(self):
         controller = Controller(self.settings(min_off_s=600))
         controller.set_heat(True, 0)
         controller.tick(0, status(), None, 15, 0)
         controller.tick(5, status(3, 2, coolant=50), None, 15, 0)
         idle = controller.tick(6, status(coolant=50), None, 15, 0)
-        self.assertNotIn(start_thermostat(), commands_of(idle))
+        self.assertIn(start_thermostat(), commands_of(idle))
+
+    def test_the_request_is_repeated_while_heating_stays_on(self):
+        controller = Controller(self.settings())
+        controller.set_heat(True, 0)
+        controller.tick(0, status(3, 2, coolant=40), None, 15, 0)
+        held = controller.tick(30, status(3, 2, coolant=40), None, 15, 0)
+        self.assertNotIn(requested_temperature(20), commands_of(held))
+        again = controller.tick(60, status(3, 2, coolant=40), None, 15, 0)
+        self.assertIn(requested_temperature(20), commands_of(again))
 
     def test_the_thermostat_card_updates_a_running_heater(self):
         controller = Controller(self.settings(room_target=18))
@@ -232,7 +241,7 @@ class ControllerTests(unittest.TestCase):
         self.assertNotIn(requested_temperature(22), commands_of(held))
         controller.settings.room_target = 22
         idle = controller.tick(4, status(), None, 17, 0)
-        self.assertNotIn(requested_temperature(22), commands_of(idle))
+        self.assertIn(requested_temperature(22), commands_of(idle))
 
     def test_switching_on_again_sends_start(self):
         controller = Controller(self.settings())
