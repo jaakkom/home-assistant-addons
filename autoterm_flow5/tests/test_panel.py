@@ -54,6 +54,8 @@ class PanelTests(unittest.TestCase):
         self.assertIn('const PREFIX = "/api/hassio_ingress/abc"', body)
         self.assertIn("Tallenna", body)
         self.assertIn('{key: "fuel_level", min: 0, max: 500, step: "any"}', body)
+        self.assertIn('{key: "run_minutes", min: 0, max: 720, step: 1}', body)
+        self.assertIn("Käyntiaika (min, 0 ääretön)", body)
         self.assertIn("Liekki", body)
         self.assertIn("Pyyntilämpötila", body)
         self.assertIn("function panelRoot", body)

@@ -34,6 +34,8 @@ class Settings:
     pump_dose_ml: float = 0.044
     tank_capacity_l: float = 0.0
     preheat_minutes: int = 30
+    # 0 is Comfort Control's unlimited run time. A positive value is minutes.
+    run_minutes: int = 0
     extended_telemetry: bool = True
     debug: bool = False
     circulation_pump: bool = False
@@ -67,6 +69,7 @@ class Settings:
             pump_dose_ml=_clamp(self.pump_dose_ml, 0.01, 0.2),
             tank_capacity_l=_clamp(self.tank_capacity_l, 0, 500),
             preheat_minutes=int(_clamp(self.preheat_minutes, 1, 480)),
+            run_minutes=int(_clamp(self.run_minutes, 0, 720)),
             extended_telemetry=bool(self.extended_telemetry),
             debug=bool(self.debug),
             circulation_pump=bool(self.circulation_pump),
@@ -179,6 +182,7 @@ def settings_from_options(options: dict) -> Settings:
         pump_dose_ml=num("fuel", "pump_dose_ml", 0.044),
         tank_capacity_l=num("fuel", "tank_capacity_l", 0),
         preheat_minutes=int(num("timing", "preheat_minutes", 30)),
+        run_minutes=int(num("timing", "run_minutes", 0)),
         extended_telemetry=flag("device", "extended_telemetry", True),
         debug=flag("device", "debug", False),
         circulation_pump=flag("timing", "circulation_pump", False),

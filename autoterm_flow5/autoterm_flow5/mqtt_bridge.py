@@ -174,6 +174,7 @@ def discovery_messages() -> list[tuple[str, str]]:
         _number("tank_capacity", "Tank capacity", 0, 500, 0.5, "L"),
         _number("fuel_level", "Fuel in tank", 0, 500, 0.1, "L"),
         _number("preheat_minutes", "Preheat duration", 1, 480, 1, "min"),
+        _number("run_minutes", "Run time (0 unlimited)", 0, 720, 1, "min"),
         _number("simulate_room", "Simulated room temperature", 0, 40, 0.5, "°C", category="config"),
         _number("simulate_fault", "Simulated fault code", 0, 255, 1, category="config"),
         _binary("simulation", "Simulation", diagnostic=True),
@@ -429,6 +430,7 @@ def collect_state(
         "fan_temperature": settings.fan_temperature,
         "pump_dose": settings.pump_dose_ml,
         "preheat_minutes": settings.preheat_minutes,
+        "run_minutes": settings.run_minutes,
         "simulate_room": settings.simulate_room_c,
         "simulate_fault": settings.simulate_fault,
         "simulation": "ON" if settings.simulate else "OFF",
@@ -534,6 +536,8 @@ def _apply_number(settings: Settings, key: str, text: str) -> None:
         settings.tank_capacity_l = float(text)
     elif key == "preheat_minutes":
         settings.preheat_minutes = int(float(text))
+    elif key == "run_minutes":
+        settings.run_minutes = int(float(text))
     elif key == "simulate_room":
         settings.simulate_room_c = float(text)
     elif key == "simulate_fault":

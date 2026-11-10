@@ -1,9 +1,10 @@
 """Panel replacement.
 
 Thermostat mode follows the comfort panel. The climate card sets the
-requested temperature, and the room sensor is reported as the cabin
-temperature the heater hysterises against. Preheat follows coolant
-temperature instead. Pump mode still uses the add-on's own limits.
+temperature, and the run time is separate. Zero minutes is unlimited.
+The room sensor is reported as the cabin temperature the heater
+hysterises against. Preheat follows coolant temperature instead.
+Pump mode still uses the add-on's own limits.
 """
 
 from __future__ import annotations
@@ -31,9 +32,6 @@ from .settings import Settings
 LOG = logging.getLogger("autoterm_flow5.controller")
 MODES = ("thermostat", "preheat", "pump")
 ACTIVE = frozenset({"starting", "running"})
-# The control unit drops a run that is not refreshed. A start on every poll
-# silences telemetry, so the same request goes out about once a minute.
-SETPOINT_REPEAT_S = 60.0
 DEVICE_SETTING_KEYS = frozenset({
     "coolant_limit",
     "auxiliary_mode",
@@ -122,10 +120,11 @@ class Controller:
         self._circulation_sent = False
         self._cabin_at: float | None = None
         self._cabin_c: int | None = None
-        # The thermostat request is repeated while heating stays on.
+        # Sent once per temperature and run time. A later idle is the heater
+        # finishing that run, not a request for another start.
         self._thermostat_on = False
         self._setpoint_c: int | None = None
-        self._setpoint_at: float | None = None
+        self._run_minutes_sent: int | None = None
         self._device_raw: bytes | None = None
         self._settings_dirty: set[str] = set()
         self._settings_pending = False
@@ -155,7 +154,7 @@ class Controller:
             self._pump_sent = False
             self._thermostat_on = False
             self._setpoint_c = None
-            self._setpoint_at = None
+            self._run_minutes_sent = None
             self.demand = True
         elif not enabled and self.heat_enabled:
             self.heat_enabled = False
@@ -343,7 +342,7 @@ class Controller:
             self._start_at = None
             self._thermostat_on = False
             self._setpoint_c = None
-            self._setpoint_at = None
+            self._run_minutes_sent = None
         elif self.heat_enabled and (thermostat or not self.lockout):
             if phase in ACTIVE and self._run_started_at is None:
                 self._run_started_at = now
@@ -430,32 +429,33 @@ class Controller:
         voltage: float | None,
         room_age_s: float | None,
     ) -> list[bytes]:
-        # Comfort-panel mode. The card's requested temperature is the heater
-        # setpoint, and the cabin report is the room sensor it hysterises
-        # against. Preheat is the other mode: that one follows coolant.
-        # The request is sent when heating is switched on, when the card value
-        # changes, about once a minute while the request stays on, and again
-        # if the burner goes out with no fault. A fault is left alone.
+        # Comfort Control sets a temperature and a run time. The run time
+        # can be unlimited, which is the default. The cabin report is the
+        # room sensor. Sending the Celsius value as the run time made an
+        # 8 °C target last eight minutes. The pair is sent when heating is
+        # switched on and when either value changes. It is not sent again
+        # on a timer, and a burner that returns to idle is left there: a
+        # finite run is supposed to end, and an unlimited one is the
+        # heater's own session. A fault is left alone.
         del fresh, coolant, voltage, room_age_s
         if fault:
             return []
         if phase == "cooldown":
             return []
         target = max(0, min(40, int(round(self.settings.room_target))))
-        changed = self._setpoint_c != target
-        due = self._setpoint_at is None or now - self._setpoint_at >= SETPOINT_REPEAT_S
-        dropped = phase == "idle" and self._phase in ACTIVE | {"cooldown", "pump"}
-        if self._thermostat_on and not changed and not due and not dropped:
+        minutes = max(0, min(720, int(self.settings.run_minutes)))
+        changed = self._setpoint_c != target or self._run_minutes_sent != minutes
+        if self._thermostat_on and not changed:
             return []
         starting = phase == "idle" and not self._thermostat_on
         self._thermostat_on = True
         self._setpoint_c = target
-        self._setpoint_at = now
-        if starting or dropped:
+        self._run_minutes_sent = minutes
+        if starting:
             self._run_started_at = now
             self._start_at = now
             self._stop_reason = None
-        return [requested_temperature(target)]
+        return [requested_temperature(target, minutes)]
 
     def _note_unexpected_stop(self, now: float, coolant: float | None) -> None:
         """The burner left an active phase with no fault and no stop from us.

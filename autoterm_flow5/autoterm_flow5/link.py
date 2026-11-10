@@ -457,11 +457,17 @@ def _log_report(command: bytes) -> None:
 
 
 def _log_control(command: bytes) -> None:
-    if command[4] == TYPE_START and len(command) >= 7:
-        value = int.from_bytes(command[5:7], "big")
-        if value <= 40:
-            LOG.info("Sent requested temperature %s °C", value)
-            return
+    if command[4] == TYPE_START and len(command) >= 11 and command[2] >= 6:
+        minutes = int.from_bytes(command[5:7], "big")
+        temp = command[8]
+        if minutes == 0xFFFF:
+            LOG.info("Sent thermostat %s °C with unlimited run time", temp)
+        else:
+            LOG.info("Sent thermostat %s °C with %s min run time", temp, minutes)
+        return
+    if command[4] == TYPE_START and len(command) >= 7 and command[2] == 2:
+        LOG.info("Sent run time %s min", int.from_bytes(command[5:7], "big"))
+        return
     kind = {
         TYPE_START: "start",
         TYPE_STOP: "stop",

@@ -43,13 +43,17 @@ class CrcTests(unittest.TestCase):
         self.assertEqual(len(long), 1)
         self.assertEqual(long[0][5:7].hex(), "0078")
 
-    def test_thermostat_marker(self):
-        frame = requested_temperature(34)
+    def test_thermostat_separates_temperature_and_run_time(self):
+        frame = start_thermostat(8)
         self.assertEqual(frame[4], 0x01)
-        self.assertEqual(frame[5:7].hex(), "0022")
-        self.assertEqual(start_thermostat(20)[5:7].hex(), "0014")
-        self.assertEqual(requested_temperature(80)[5:7].hex(), "0028")
-        self.assertEqual(requested_temperature(-5)[5:7].hex(), "0000")
+        self.assertEqual(frame[2], 6)
+        # 0xFFFF is unlimited. The 8 °C setpoint is not the run-time word.
+        self.assertEqual(frame[5:11].hex(), "ffff02080000")
+        self.assertEqual(start_thermostat(8, 45)[5:11].hex(), "002d02080000")
+        self.assertEqual(requested_temperature(34), start_thermostat(34))
+        self.assertEqual(start_thermostat(80)[8], 40)
+        self.assertEqual(start_thermostat(-5)[8], 0)
+        self.assertEqual(start_thermostat(20, 0)[5:7].hex(), "ffff")
 
 
 class FramerRepairTests(unittest.TestCase):

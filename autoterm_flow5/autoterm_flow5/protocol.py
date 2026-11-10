@@ -210,20 +210,41 @@ def stop_command() -> bytes:
     return build_frame(DEV_PANEL, TYPE_STOP)
 
 
-def requested_temperature(celsius: int) -> bytes:
-    """Comfort-panel request, 0–40 °C.
+# Comfort Control sends a temperature and a run time. The run time is the
+# first two bytes of the start payload, in minutes. 0xFFFF is the step past
+# 12 hours, shown on the panel as unlimited. Mode 0x02 uses the temperature
+# the panel reports (command 0x11) as the thermostat sensor.
+MODE_BY_PANEL = 0x02
+UNLIMITED_RUN = 0xFFFF
 
-    BINAR-5S command type 1 carries this value. The captured thermostat
-    start ``0022`` is 34 °C in that same two-byte form. Sending it again
-    changes the request while the burner is already running. The heater
-    compares it with the cabin temperature and applies its own hysteresis.
+
+def start_thermostat(celsius: int = 20, minutes: int | None = None) -> bytes:
+    """Start in thermostat mode with a temperature and a run time.
+
+    A two-byte type 0x01 value is the run time, not the setpoint. Sending
+    8 there ran this heater for eight minutes and then into cooldown, with
+    the room either side of 8 °C. The setpoint is its own byte, and the
+    run time can be unlimited.
     """
-    value = max(0, min(40, int(celsius)))
-    return build_frame(DEV_PANEL, TYPE_START, value.to_bytes(2, "big"))
+    temp = max(0, min(40, int(celsius)))
+    if minutes is None or int(minutes) <= 0:
+        run = UNLIMITED_RUN
+    else:
+        run = max(1, min(720, int(minutes)))
+    payload = bytes((
+        (run >> 8) & 0xFF,
+        run & 0xFF,
+        MODE_BY_PANEL,
+        temp,
+        0,
+        0,
+    ))
+    return build_frame(DEV_PANEL, TYPE_START, payload)
 
 
-def start_thermostat(celsius: int = 20) -> bytes:
-    return requested_temperature(celsius)
+def requested_temperature(celsius: int, minutes: int | None = None) -> bytes:
+    """Thermostat start. The temperature is not written into the run-time bytes."""
+    return start_thermostat(celsius, minutes)
 
 
 def start_preheat(minutes: int) -> list[bytes]:
