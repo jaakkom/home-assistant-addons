@@ -9,6 +9,9 @@ configuration:
       simulate_room_temperature:
         name: Simulated room temperature
         description: Room temperature used while simulating and no Home Assistant temperature entities are set. It can also be changed from the Simulated room temperature number.
+      simulate_outdoor_temperature:
+        name: Simulated outdoor temperature
+        description: Outdoor temperature used while simulating and no outdoor entity is set.
       simulate_fault_code:
         name: Simulated fault code
         description: Fault code the simulated heater reports. Zero means no fault. It is ignored when simulation is off.
@@ -35,12 +38,24 @@ configuration:
       temperature_entities:
         name: Temperature entities
         description: Comma-separated Home Assistant entity ids that control the heater.
+      outdoor_temperature_entity:
+        name: Outdoor temperature entity
+        description: Home Assistant entity id for outdoor temperature. Used by adaptive coolant control.
       aggregation:
         name: Temperature aggregation
         description: min uses the coldest sensor, avg the average, max the warmest.
       room_target:
         name: Room target
         description: Initial target temperature in °C.
+      adaptive_enabled:
+        name: Adaptive coolant control
+        description: Automatically adjust the liquid standby temperature for longer burns and fewer ignitions. Default off.
+      adaptive_coolant_min:
+        name: Adaptive coolant minimum
+        description: Lowest liquid target the adaptive algorithm may choose (°C).
+      adaptive_coolant_max:
+        name: Adaptive coolant maximum
+        description: Highest liquid target the adaptive algorithm may choose (°C).
   timing:
     name: Run times
     description: How long a preheat runs, and when a room sensor reading is too old to send.

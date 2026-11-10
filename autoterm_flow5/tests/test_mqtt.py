@@ -26,6 +26,9 @@ class MqttTests(unittest.TestCase):
         self.assertIn("Fuel time remaining", names)
         self.assertIn("Tank filled", names)
         self.assertIn("Debug log", names)
+        self.assertIn("Adaptive coolant control", names)
+        self.assertIn("Reset adaptive learning", names)
+        self.assertIn("Adaptive control status", names)
         diagnostic = [item for item in decoded if item.get("entity_category") == "diagnostic"]
         self.assertTrue(any(item.get("name", "").startswith("Status byte") for item in diagnostic))
         self.assertTrue(any(item.get("name", "").startswith("Extended byte") for item in diagnostic))

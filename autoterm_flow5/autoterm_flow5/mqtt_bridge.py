@@ -176,8 +176,22 @@ def discovery_messages() -> list[tuple[str, str]]:
         _number("preheat_minutes", "Preheat duration", 1, 480, 1, "min"),
         _number("run_minutes", "Run time (0 unlimited)", 0, 720, 1, "min"),
         _number("simulate_room", "Simulated room temperature", 0, 40, 0.5, "°C", category="config"),
+        _number("simulate_outdoor", "Simulated outdoor temperature", -40, 40, 0.5, "°C", category="config"),
         _number("simulate_fault", "Simulated fault code", 0, 255, 1, category="config"),
         _binary("simulation", "Simulation", diagnostic=True),
+        _sensor("outdoor", "Outdoor temperature", unit="°C", device_class="temperature", state_class="measurement"),
+        _sensor("adaptive_status", "Adaptive control status"),
+        _sensor("adaptive_mode", "Adaptive operating mode", diagnostic=True),
+        _sensor("adaptive_coolant_target", "Adaptive coolant target", unit="°C", device_class="temperature", diagnostic=True),
+        _sensor("adaptive_ua", "Adaptive UA", unit="kW/°C", diagnostic=True, precision=4),
+        _sensor("adaptive_c", "Adaptive radiator C", diagnostic=True, precision=5),
+        _sensor("adaptive_ignitions_day", "Ignitions per day", state_class="measurement", diagnostic=True),
+        _sensor("adaptive_avg_run_s", "Average run time", unit="s", state_class="measurement", diagnostic=True),
+        _sensor("adaptive_room_error", "Room temperature error", unit="°C", state_class="measurement", diagnostic=True),
+        _sensor("adaptive_k_table", "Adaptive K table", diagnostic=True),
+        _number("adaptive_coolant_min", "Adaptive coolant minimum", 20, 95, 1, "°C", category="config"),
+        _number("adaptive_coolant_max", "Adaptive coolant maximum", 20, 95, 1, "°C", category="config"),
+        _number("room_drop", "Room hysteresis", 0, 10, 0.5, "°C", category="config"),
     ]
     for index in (5, 8, 10, 13, 14, 15, 17):
         entities.append(_sensor(f"status_byte_{index}", f"Status byte {index}", diagnostic=True))
@@ -223,6 +237,26 @@ def discovery_messages() -> list[tuple[str, str]]:
         "availability_topic": f"{PREFIX}/availability",
         "device": DEVICE,
         "icon": "mdi:gas-station",
+    })))
+    messages.append((f"homeassistant/button/{PREFIX}/adaptive_reset/config", json.dumps({
+        "name": "Reset adaptive learning",
+        "unique_id": f"{PREFIX}_adaptive_reset",
+        "command_topic": set_topic("adaptive_reset"),
+        "availability_topic": f"{PREFIX}/availability",
+        "device": DEVICE,
+        "entity_category": "config",
+        "icon": "mdi:brain",
+    })))
+    messages.append((f"homeassistant/switch/{PREFIX}/adaptive_enabled/config", json.dumps({
+        "name": "Adaptive coolant control",
+        "unique_id": f"{PREFIX}_adaptive_enabled",
+        "command_topic": set_topic("adaptive_enabled"),
+        "state_topic": state_topic("adaptive_enabled"),
+        "payload_on": "ON",
+        "payload_off": "OFF",
+        "availability_topic": f"{PREFIX}/availability",
+        "device": DEVICE,
+        "icon": "mdi:chart-timeline-variant-shimmer",
     })))
     messages.append((f"homeassistant/select/{PREFIX}/mode/config", json.dumps({
         "name": "Mode",
@@ -341,6 +375,8 @@ def collect_state(
     frequency_hz: float,
     status_at: float | None = None,
     extended_at: float | None = None,
+    outdoor_c: float | None = None,
+    adaptive: Any | None = None,
 ) -> dict[str, str]:
     from .fuel import liters_per_hour, milliliters_per_minute
 
@@ -405,6 +441,7 @@ def collect_state(
         "tank_capacity": settings.tank_capacity_l,
         "fuel_level": _num(fuel.remaining_liters),
         "room": _num(room_c),
+        "outdoor": _num(outdoor_c),
         "demand": "ON" if controller.demand else "OFF",
         "link": "ON" if online else "OFF",
         "telemetry_stale": "ON" if telemetry_stale else "OFF",
@@ -424,6 +461,7 @@ def collect_state(
         "pump_standby": "ON" if settings.pump_standby else "OFF",
         "alarm_channel": "ON" if settings.alarm_channel else "OFF",
         "room_target": settings.room_target,
+        "room_drop": settings.room_drop,
         "sensor_stale": settings.sensor_stale_s / 60,
         "shutdown_voltage": settings.shutdown_voltage,
         "shutdown_voltage_seconds": settings.shutdown_voltage_s,
@@ -432,10 +470,28 @@ def collect_state(
         "preheat_minutes": settings.preheat_minutes,
         "run_minutes": settings.run_minutes,
         "simulate_room": settings.simulate_room_c,
+        "simulate_outdoor": settings.simulate_outdoor_c,
         "simulate_fault": settings.simulate_fault,
         "simulation": "ON" if settings.simulate else "OFF",
         "debug": "ON" if settings.debug else "OFF",
+        "adaptive_enabled": "ON" if settings.adaptive_enabled else "OFF",
+        "adaptive_coolant_min": settings.adaptive_coolant_min,
+        "adaptive_coolant_max": settings.adaptive_coolant_max,
     }
+    if adaptive is not None:
+        values.update(adaptive.status_values())
+    else:
+        values.setdefault("adaptive_status", "off")
+        values.setdefault("adaptive_mode", "")
+        values.setdefault("adaptive_coolant_target", "")
+        values.setdefault("adaptive_ua", "")
+        values.setdefault("adaptive_c", "")
+        values.setdefault("adaptive_ignitions_day", "")
+        values.setdefault("adaptive_avg_run_s", "")
+        values.setdefault("adaptive_room_error", "")
+        values.setdefault("adaptive_k_table", "")
+        values.setdefault("adaptive_reliable", "OFF")
+        values.setdefault("adaptive_coolant_drop", "")
     if status is not None:
         for index, value in status.unmapped.items():
             values[f"status_byte_{index}"] = value
@@ -452,8 +508,10 @@ def apply_command(
     payload: str,
     now: float,
     fuel: FuelMeter | None = None,
+    adaptive: Any | None = None,
 ) -> str | None:
-    """Apply one retained or live command. Return 'reset-fuel' when asked."""
+    """Apply one retained or live command. Return a special action name when asked."""
+    del adaptive
     key = topic.removeprefix(f"{PREFIX}/set/")
     text = payload.strip()
     previous = getattr(settings, key, None)
@@ -463,6 +521,8 @@ def apply_command(
         controller.request_stop(now)
     elif key == "fuel_reset":
         return "reset-fuel"
+    elif key == "adaptive_reset":
+        return "reset-adaptive"
     elif key == "fuel_refuel":
         if fuel is not None and fuel.refuel(settings.tank_capacity_l):
             fuel.save()
@@ -488,6 +548,8 @@ def apply_command(
         settings.circulation_pump = text == "ON"
     elif key == "debug":
         settings.debug = text == "ON"
+    elif key == "adaptive_enabled":
+        settings.adaptive_enabled = text == "ON"
     elif key == "auxiliary_mode" and text in {"off", "auto", "manual"}:
         settings.auxiliary_mode = text
     elif key == "relay_mode" and text in {"auto", "off"}:
@@ -518,6 +580,8 @@ def apply_command(
 def _apply_number(settings: Settings, key: str, text: str) -> None:
     if key == "room_target":
         settings.room_target = float(text)
+    elif key == "room_drop":
+        settings.room_drop = float(text)
     elif key == "sensor_stale":
         settings.sensor_stale_s = float(text) * 60
     elif key == "coolant_limit":
@@ -540,8 +604,14 @@ def _apply_number(settings: Settings, key: str, text: str) -> None:
         settings.run_minutes = int(float(text))
     elif key == "simulate_room":
         settings.simulate_room_c = float(text)
+    elif key == "simulate_outdoor":
+        settings.simulate_outdoor_c = float(text)
     elif key == "simulate_fault":
         settings.simulate_fault = int(float(text))
+    elif key == "adaptive_coolant_min":
+        settings.adaptive_coolant_min = float(text)
+    elif key == "adaptive_coolant_max":
+        settings.adaptive_coolant_max = float(text)
     else:
         raise ValueError(key)
 

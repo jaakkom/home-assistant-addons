@@ -41,12 +41,28 @@ class Settings:
     circulation_pump: bool = False
     aggregation: str = "min"
     temperature_entities: str = ""
+    outdoor_temperature_entity: str = ""
+    adaptive_enabled: bool = False
+    adaptive_coolant_min: float = 45.0
+    adaptive_coolant_max: float = 85.0
+    adaptive_margin_c: float = 3.0
+    adaptive_base_step_c: float = 2.0
+    adaptive_step_up_ratio: float = 0.6
+    adaptive_power_confirm_s: float = 1800.0
+    adaptive_power_lockout_s: float = 5400.0
+    adaptive_soot_interval_h: float = 24.0
+    adaptive_soot_target_c: float = 80.0
+    adaptive_safe_coolant_c: float = 65.0
+    manual_coolant_limit: float = 88.0
     simulate: bool = False
     simulate_room_c: float = 15.0
+    simulate_outdoor_c: float = 0.0
     simulate_fault: int = 0
 
     def sanitized(self) -> Settings:
         aggregation = self.aggregation if self.aggregation in {"min", "avg", "max"} else "min"
+        coolant_min = _clamp(self.adaptive_coolant_min, 20, 95)
+        coolant_max = _clamp(self.adaptive_coolant_max, coolant_min, 95)
         return Settings(
             room_target=_clamp(self.room_target, 0, 40),
             room_drop=_clamp(self.room_drop, 0, 10),
@@ -75,13 +91,31 @@ class Settings:
             circulation_pump=bool(self.circulation_pump),
             aggregation=aggregation,
             temperature_entities=self.temperature_entities.strip(),
+            outdoor_temperature_entity=self.outdoor_temperature_entity.strip(),
+            adaptive_enabled=bool(self.adaptive_enabled),
+            adaptive_coolant_min=coolant_min,
+            adaptive_coolant_max=coolant_max,
+            adaptive_margin_c=_clamp(self.adaptive_margin_c, 0, 15),
+            adaptive_base_step_c=_clamp(self.adaptive_base_step_c, 0.2, 10),
+            adaptive_step_up_ratio=_clamp(self.adaptive_step_up_ratio, 0.1, 1.5),
+            adaptive_power_confirm_s=_clamp(self.adaptive_power_confirm_s, 60, 7200),
+            adaptive_power_lockout_s=_clamp(self.adaptive_power_lockout_s, 60, 14400),
+            adaptive_soot_interval_h=_clamp(self.adaptive_soot_interval_h, 1, 168),
+            adaptive_soot_target_c=_clamp(self.adaptive_soot_target_c, 60, 95),
+            adaptive_safe_coolant_c=_clamp(self.adaptive_safe_coolant_c, 40, 95),
+            manual_coolant_limit=_clamp(self.manual_coolant_limit, 20, 95),
             simulate=bool(self.simulate),
             simulate_room_c=_clamp(self.simulate_room_c, 0, 40),
+            simulate_outdoor_c=_clamp(self.simulate_outdoor_c, -40, 40),
             simulate_fault=int(_clamp(self.simulate_fault, 0, 255)),
         )
 
     def entity_ids(self) -> list[str]:
         return [part.strip() for part in self.temperature_entities.split(",") if part.strip()]
+
+    def outdoor_entity_id(self) -> str | None:
+        text = self.outdoor_temperature_entity.strip()
+        return text or None
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -140,6 +174,8 @@ def load_settings(path: Path, options: dict) -> Settings:
     # list saved on the first start.
     if option_is_set(options, "temperature", "temperature_entities"):
         settings.temperature_entities = seeded.temperature_entities
+    if option_is_set(options, "temperature", "outdoor_temperature_entity"):
+        settings.outdoor_temperature_entity = seeded.outdoor_temperature_entity
     return settings.sanitized()
 
 
@@ -188,7 +224,12 @@ def settings_from_options(options: dict) -> Settings:
         circulation_pump=flag("timing", "circulation_pump", False),
         aggregation=text("temperature", "aggregation", "min"),
         temperature_entities=text("temperature", "temperature_entities"),
+        outdoor_temperature_entity=text("temperature", "outdoor_temperature_entity"),
+        adaptive_enabled=flag("temperature", "adaptive_enabled", False),
+        adaptive_coolant_min=num("temperature", "adaptive_coolant_min", 45),
+        adaptive_coolant_max=num("temperature", "adaptive_coolant_max", 85),
         simulate=flag("simulation", "simulate", False),
         simulate_room_c=num("simulation", "simulate_room_temperature", 15),
+        simulate_outdoor_c=num("simulation", "simulate_outdoor_temperature", 0),
         simulate_fault=int(num("simulation", "simulate_fault_code", 0)),
     ).sanitized()
