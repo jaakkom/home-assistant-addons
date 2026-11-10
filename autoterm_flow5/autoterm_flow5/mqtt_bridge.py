@@ -183,6 +183,7 @@ def discovery_messages() -> list[tuple[str, str]]:
         _sensor("adaptive_status", "Adaptive control status"),
         _sensor("adaptive_mode", "Adaptive operating mode", diagnostic=True),
         _sensor("adaptive_coolant_target", "Adaptive coolant target", unit="°C", device_class="temperature", diagnostic=True),
+        _sensor("adaptive_actual_coolant", "Confirmed coolant target", unit="°C", device_class="temperature", diagnostic=True),
         _sensor("adaptive_ua", "Adaptive UA", unit="kW/°C", diagnostic=True, precision=4),
         _sensor("adaptive_c", "Adaptive radiator C", diagnostic=True, precision=5),
         _sensor("adaptive_ignitions_day", "Ignitions per day", state_class="measurement", diagnostic=True),
@@ -484,6 +485,7 @@ def collect_state(
         values.setdefault("adaptive_status", "off")
         values.setdefault("adaptive_mode", "")
         values.setdefault("adaptive_coolant_target", "")
+        values.setdefault("adaptive_actual_coolant", "")
         values.setdefault("adaptive_ua", "")
         values.setdefault("adaptive_c", "")
         values.setdefault("adaptive_ignitions_day", "")

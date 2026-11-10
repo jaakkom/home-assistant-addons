@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .adaptive import AdaptiveController, config_from_settings
-from .controller import Controller, aggregate, phase_of, _coolant, _fault
+from .controller import Controller, aggregate, phase_of, _coolant, _fault, _phase_from
 from .faults import ChangeNotifier, LinkNotifier, Notice, fault_name
 from .fuel import FuelMeter, liters_per_hour
 from .ha import deliver_notice, read_temperature, supervisor_token
@@ -289,12 +289,13 @@ def _apply_adaptive_actions(
     """Apply stop/start/coolant writes requested by adaptive control."""
     changed = False
     if actions.coolant_limit is not None:
-        limit = max(20.0, min(95.0, float(actions.coolant_limit)))
-        if abs(settings.coolant_limit - limit) >= 0.05:
-            settings.coolant_limit = limit
-            controller.settings = settings
-            controller.note_device_setting("coolant_limit")
-            changed = True
+        # Always written: the local copy can match while the heater kept its own value.
+        settings.coolant_limit = max(20.0, min(95.0, float(actions.coolant_limit)))
+        controller.settings = settings
+        controller.note_device_setting("coolant_limit")
+        changed = True
+    if actions.hold_start is not None:
+        controller.start_blocked = actions.hold_start
     if actions.stop:
         controller.adaptive_stop(now)
     if actions.start:
@@ -361,43 +362,24 @@ def step(
 
     if adaptive is not None:
         adaptive.configure(config_from_settings(settings))
-        phase = phase_of(link.status)
-        if link.extended is not None and (
-            link.last_extended_at is not None
-            and (link.last_status_at is None or link.last_extended_at > link.last_status_at)
-        ):
-            from .controller import _phase_from
-
-            phase = _phase_from(link.extended.state, link.extended.substate)
-        burner = bool(link.status.burner_active) if link.status is not None else False
-        if link.extended is not None and phase == "running":
-            # Extended frames do not carry burner_active; treat glow-off running
-            # with zero pump as standby-like only when status says so.
-            pass
+        state = _heater_state(link)
+        phase = _phase_from(*state) if state is not None else "unknown"
         coolant = _coolant(link.status, link.extended, link.last_status_at, link.last_extended_at)
-        fault = _fault(link.status, link.extended)
-        frequency_pre = link.extended.pump_hz if link.extended is not None else 0.0
         fresh_room = room_c is not None and room_age_s is not None and room_age_s <= settings.sensor_stale_s
-        sensors_ok = fresh_room and outdoor_c is not None and coolant is not None and fault == 0
-        # Outdoor may be optional for steering when a prior value exists; still
-        # require a room reading and no fault before active corrections.
-        if outdoor_c is None and adaptive.model.outdoor_history:
-            outdoor_c = adaptive.model.outdoor_history[-1][1]
         actions = adaptive.tick(
             now,
+            state=state,
             phase=phase,
-            burner_active=burner,
-            fault=fault,
+            fault=_fault(link.status, link.extended),
             heat_enabled=controller.heat_enabled,
             mode=controller.mode,
             room_c=room_c if fresh_room else None,
             outdoor_c=outdoor_c,
             coolant_c=coolant,
-            pump_hz=frequency_pre,
+            pump_hz=link.extended.pump_hz if link.extended is not None else 0.0,
             room_target=settings.room_target,
             hysteresis_c=settings.room_drop,
-            current_coolant_limit=settings.coolant_limit,
-            sensors_ok=sensors_ok or (fresh_room and fault == 0 and coolant is not None),
+            confirmed_coolant=controller.confirmed_standby(),
         )
         if _apply_adaptive_actions(actions, controller, settings, adaptive, now):
             settings_changed = True
@@ -509,6 +491,21 @@ def _remember_room_warning(when: float | None) -> None:
 def _remember_outdoor_warning(when: float | None) -> None:
     global _outdoor_warned_at
     _outdoor_warned_at = when
+
+
+def _heater_state(link: SerialLink) -> tuple[int, int] | None:
+    """State and substate from the newest frame. The status frame goes stale while the stream runs."""
+    extended_newer = link.extended is not None and (
+        link.last_status_at is None
+        or (link.last_extended_at is not None and link.last_extended_at > link.last_status_at)
+    )
+    if extended_newer:
+        return (link.extended.state, link.extended.substate)
+    if link.status is not None:
+        return (link.status.state, link.status.substate)
+    if link.extended is not None:
+        return (link.extended.state, link.extended.substate)
+    return None
 
 
 def _current_fault(link: SerialLink) -> int:

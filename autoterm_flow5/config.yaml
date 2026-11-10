@@ -43,6 +43,10 @@ options:
     adaptive_enabled: false
     adaptive_coolant_min: 45
     adaptive_coolant_max: 85
+    adaptive_min_burn_minutes: 20
+    adaptive_max_stops_6h: 2
+    adaptive_rise_offset: 1.0
+    adaptive_rise_target: 75
   timing:
     sensor_stale_minutes: 15
     preheat_minutes: 30
@@ -77,6 +81,10 @@ schema:
     adaptive_enabled: bool
     adaptive_coolant_min: float(20,95)
     adaptive_coolant_max: float(20,95)
+    adaptive_min_burn_minutes: int(0,240)
+    adaptive_max_stops_6h: int(0,10)
+    adaptive_rise_offset: float(0.3,10)
+    adaptive_rise_target: float(40,95)
   timing:
     sensor_stale_minutes: int(1,120)
     preheat_minutes: int(1,480)
