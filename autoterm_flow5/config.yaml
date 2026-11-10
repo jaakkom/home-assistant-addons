@@ -1,5 +1,5 @@
 name: Autoterm Flow 5
-version: "0.4.25"
+version: "0.5.0"
 slug: autoterm_flow5
 description: >-
   Replaces the Autoterm Flow 5 control panel. Controls and monitors the
@@ -28,6 +28,7 @@ options:
   simulation:
     simulate: false
     simulate_room_temperature: 15
+    simulate_outdoor_temperature: 0
     simulate_fault_code: 0
   device:
     serial_port: /dev/ttyUSB0
@@ -36,8 +37,12 @@ options:
     debug: false
   temperature:
     temperature_entities: ""
+    outdoor_temperature_entity: ""
     aggregation: min
     room_target: 20
+    adaptive_enabled: false
+    adaptive_coolant_min: 45
+    adaptive_coolant_max: 85
   timing:
     sensor_stale_minutes: 15
     preheat_minutes: 30
@@ -57,6 +62,7 @@ schema:
   simulation:
     simulate: bool
     simulate_room_temperature: float(0,40)
+    simulate_outdoor_temperature: float(-40,40)
     simulate_fault_code: int(0,255)
   device:
     serial_port: str
@@ -65,8 +71,12 @@ schema:
     debug: bool
   temperature:
     temperature_entities: str?
+    outdoor_temperature_entity: str?
     aggregation: list(min|avg|max)
     room_target: float(0,40)
+    adaptive_enabled: bool
+    adaptive_coolant_min: float(20,95)
+    adaptive_coolant_max: float(20,95)
   timing:
     sensor_stale_minutes: int(1,120)
     preheat_minutes: int(1,480)

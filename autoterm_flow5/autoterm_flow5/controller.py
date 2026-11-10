@@ -167,6 +167,33 @@ class Controller:
     def request_stop(self, now: float) -> None:
         self.set_heat(False, now)
 
+    def adaptive_stop(self, now: float) -> None:
+        """Stop the burner for an adaptive coolant rewrite. Heating stays on."""
+        if not self.heat_enabled:
+            return
+        self._stop_pending = True
+        self._stop_requested = True
+        self._stop_reason = "adaptive"
+        self._stopped_at = now
+        self._thermostat_on = False
+        self._setpoint_c = None
+        self._run_minutes_sent = None
+
+    def adaptive_resume(self, now: float) -> None:
+        """Start again after an adaptive stop once the heater is idle."""
+        del now
+        if not self.heat_enabled:
+            return
+        self._stop_pending = False
+        self._stop_requested = False
+        self._stop_reason = None
+        self._thermostat_on = False
+        self._setpoint_c = None
+        self._run_minutes_sent = None
+        self._preheat_sent = False
+        self._pump_sent = False
+        self.demand = True
+
     def note_device_setting(self, key: str) -> None:
         """The user changed one stored setting. Write it after the block is known."""
         if key not in DEVICE_SETTING_KEYS:

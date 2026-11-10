@@ -9,7 +9,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .controller import Controller, aggregate, phase_of
+from .adaptive import AdaptiveController, config_from_settings
+from .controller import Controller, aggregate, phase_of, _coolant, _fault
 from .faults import ChangeNotifier, LinkNotifier, Notice, fault_name
 from .fuel import FuelMeter, liters_per_hour
 from .ha import deliver_notice, read_temperature, supervisor_token
@@ -23,6 +24,7 @@ LOG = logging.getLogger("autoterm_flow5")
 OPTIONS = Path(os.environ.get("OPTIONS_PATH", "/data/options.json"))
 SETTINGS_PATH = Path(os.environ.get("SETTINGS_PATH", "/data/settings.json"))
 FUEL_PATH = Path(os.environ.get("FUEL_PATH", "/data/fuel.json"))
+ADAPTIVE_PATH = Path(os.environ.get("ADAPTIVE_PATH", "/data/adaptive_model.json"))
 HA_API = os.environ.get("HA_API_URL", "http://supervisor/core/api")
 POLL_S = 1.0
 REOPEN_S = 5.0
@@ -57,6 +59,8 @@ def run() -> None:
     else:
         LOG.warning("No room temperature sensor is set. Add it under Temperature entities and restart.")
     controller = Controller(settings)
+    adaptive = AdaptiveController(ADAPTIVE_PATH, config_from_settings(settings))
+    adaptive.set_manual_coolant(settings.manual_coolant_limit)
     fuel = FuelMeter(FUEL_PATH, settings.pump_dose_ml)
     if fuel.clamp_to_capacity(settings.tank_capacity_l):
         fuel.save()
@@ -99,6 +103,8 @@ def run() -> None:
         LOG.info("MQTT connected %s:%s, serial port %s @ %s", host, port, serial_path, baud)
     if settings.debug:
         LOG.info("Debug log on")
+    if settings.adaptive_enabled:
+        LOG.info("Adaptive coolant control is enabled")
 
     link: SerialLink | None = None
     progress = LinkProgress()
@@ -110,12 +116,30 @@ def run() -> None:
     last_diag_log: float | None = None
     last_room: float | None = None
     last_room_at: float | None = None
+    last_outdoor: float | None = None
+    last_outdoor_at: float | None = None
     published: dict[str, str] = {}
 
     def handle_command(topic: str, payload: str, now: float) -> None:
-        action = apply_command(controller, settings, topic, payload, now, fuel)
+        previous_adaptive = settings.adaptive_enabled
+        previous_coolant = settings.coolant_limit
+        action = apply_command(controller, settings, topic, payload, now, fuel, adaptive)
         if action == "reset-fuel":
             fuel.reset()
+        if action == "reset-adaptive":
+            adaptive.reset_learned()
+        if settings.adaptive_enabled != previous_adaptive:
+            result = adaptive.on_enabled_changed(settings.adaptive_enabled, previous_coolant)
+            if settings.adaptive_enabled:
+                settings.manual_coolant_limit = previous_coolant
+                adaptive.set_manual_coolant(previous_coolant)
+            _apply_adaptive_actions(result, controller, settings, adaptive, now)
+        elif topic.endswith("/coolant_limit") and settings.adaptive_enabled:
+            # User override while adaptive is on: keep learning paused for this cycle.
+            if abs(settings.coolant_limit - previous_coolant) > 0.05:
+                adaptive.note_manual_coolant_change()
+                settings.manual_coolant_limit = settings.coolant_limit
+        adaptive.configure(config_from_settings(settings))
         settings.save(SETTINGS_PATH)
         controller.settings = settings
 
@@ -129,6 +153,9 @@ def run() -> None:
                 topic, payload = pending.pop(0)
                 handle_command(topic, payload, now)
             room, last_room, last_room_at = _room(settings, token, now, last_room, last_room_at)
+            outdoor, last_outdoor, last_outdoor_at = _outdoor(
+                settings, token, now, last_outdoor, last_outdoor_at
+            )
             age = None if last_room_at is None else now - last_room_at
             if link is None:
                 try:
@@ -142,12 +169,26 @@ def run() -> None:
                         )
                 except Exception as exc:  # serial port missing or busy
                     LOG.warning("Could not open the serial port: %s", exc)
-                    _publish_offline(client, controller, fuel, settings, last_room, published, panel)
+                    _publish_offline(
+                        client, controller, fuel, settings, last_room, published, panel, adaptive
+                    )
                     time.sleep(REOPEN_S)
                     continue
             link.extended_telemetry = settings.extended_telemetry
             try:
-                result = step(now, link, controller, settings, fuel, faults, link_notice, last_room, age)
+                result = step(
+                    now,
+                    link,
+                    controller,
+                    settings,
+                    fuel,
+                    faults,
+                    link_notice,
+                    last_room,
+                    age,
+                    outdoor,
+                    adaptive,
+                )
             except Exception as exc:
                 LOG.warning("Heater communication failed: %s", exc)
                 if not settings.simulate and link is not None:
@@ -238,6 +279,31 @@ class CycleResult:
     settings_changed: bool = False
 
 
+def _apply_adaptive_actions(
+    actions,
+    controller: Controller,
+    settings: Settings,
+    adaptive: AdaptiveController,
+    now: float,
+) -> bool:
+    """Apply stop/start/coolant writes requested by adaptive control."""
+    changed = False
+    if actions.coolant_limit is not None:
+        limit = max(20.0, min(95.0, float(actions.coolant_limit)))
+        if abs(settings.coolant_limit - limit) >= 0.05:
+            settings.coolant_limit = limit
+            controller.settings = settings
+            controller.note_device_setting("coolant_limit")
+            changed = True
+    if actions.stop:
+        controller.adaptive_stop(now)
+    if actions.start:
+        controller.adaptive_resume(now)
+    if actions.save_model:
+        adaptive.save()
+    return changed
+
+
 def _log_link(progress: LinkProgress, now: float, online: bool, mode: str, serial_path: str) -> None:
     event = progress.update(now, online)
     if event == "answered":
@@ -275,6 +341,8 @@ def step(
     link_notice: LinkNotifier,
     room_c: float | None,
     room_age_s: float | None,
+    outdoor_c: float | None = None,
+    adaptive: AdaptiveController | None = None,
 ) -> CycleResult:
     """One control cycle against the previous status, then a fresh poll."""
     settings_changed = False
@@ -290,6 +358,50 @@ def step(
     port = link.port
     if settings.simulate and isinstance(port, SimulatedHeater):
         port.fault = int(settings.simulate_fault)
+
+    if adaptive is not None:
+        adaptive.configure(config_from_settings(settings))
+        phase = phase_of(link.status)
+        if link.extended is not None and (
+            link.last_extended_at is not None
+            and (link.last_status_at is None or link.last_extended_at > link.last_status_at)
+        ):
+            from .controller import _phase_from
+
+            phase = _phase_from(link.extended.state, link.extended.substate)
+        burner = bool(link.status.burner_active) if link.status is not None else False
+        if link.extended is not None and phase == "running":
+            # Extended frames do not carry burner_active; treat glow-off running
+            # with zero pump as standby-like only when status says so.
+            pass
+        coolant = _coolant(link.status, link.extended, link.last_status_at, link.last_extended_at)
+        fault = _fault(link.status, link.extended)
+        frequency_pre = link.extended.pump_hz if link.extended is not None else 0.0
+        fresh_room = room_c is not None and room_age_s is not None and room_age_s <= settings.sensor_stale_s
+        sensors_ok = fresh_room and outdoor_c is not None and coolant is not None and fault == 0
+        # Outdoor may be optional for steering when a prior value exists; still
+        # require a room reading and no fault before active corrections.
+        if outdoor_c is None and adaptive.model.outdoor_history:
+            outdoor_c = adaptive.model.outdoor_history[-1][1]
+        actions = adaptive.tick(
+            now,
+            phase=phase,
+            burner_active=burner,
+            fault=fault,
+            heat_enabled=controller.heat_enabled,
+            mode=controller.mode,
+            room_c=room_c if fresh_room else None,
+            outdoor_c=outdoor_c,
+            coolant_c=coolant,
+            pump_hz=frequency_pre,
+            room_target=settings.room_target,
+            hysteresis_c=settings.room_drop,
+            current_coolant_limit=settings.coolant_limit,
+            sensors_ok=sensors_ok or (fresh_room and fault == 0 and coolant is not None),
+        )
+        if _apply_adaptive_actions(actions, controller, settings, adaptive, now):
+            settings_changed = True
+
     output = controller.tick(
         now,
         link.status,
@@ -327,6 +439,8 @@ def step(
         frequency_hz=frequency,
         status_at=link.last_status_at,
         extended_at=link.last_extended_at,
+        outdoor_c=outdoor_c,
+        adaptive=adaptive,
     )
     return CycleResult(
         values=values,
@@ -359,12 +473,42 @@ def _room(
     return current, current, now
 
 
+def _outdoor(
+    settings: Settings,
+    token: str,
+    now: float,
+    last_outdoor: float | None,
+    last_outdoor_at: float | None,
+) -> tuple[float | None, float | None, float | None]:
+    entity = settings.outdoor_entity_id()
+    if settings.simulate and entity is None:
+        return settings.simulate_outdoor_c, settings.simulate_outdoor_c, now
+    if entity is None:
+        return last_outdoor, last_outdoor, last_outdoor_at
+    current = read_temperature(entity, token, HA_API)
+    if current is None:
+        if _outdoor_warned_at is None or now - _outdoor_warned_at >= 60:
+            LOG.warning("Outdoor temperature sensor did not return a number: %s", entity)
+            _remember_outdoor_warning(now)
+        return last_outdoor, last_outdoor, last_outdoor_at
+    _remember_outdoor_warning(None)
+    if last_outdoor is None or round(current, 1) != round(last_outdoor, 1):
+        LOG.info("Outdoor temperature %.1f °C from %s", current, entity)
+    return current, current, now
+
+
 _room_warned_at: float | None = None
+_outdoor_warned_at: float | None = None
 
 
 def _remember_room_warning(when: float | None) -> None:
     global _room_warned_at
     _room_warned_at = when
+
+
+def _remember_outdoor_warning(when: float | None) -> None:
+    global _outdoor_warned_at
+    _outdoor_warned_at = when
 
 
 def _current_fault(link: SerialLink) -> int:
@@ -377,7 +521,16 @@ def _current_fault(link: SerialLink) -> int:
     return 0
 
 
-def _publish_offline(client, controller, fuel, settings, room, published: dict[str, str], panel: PanelHub | None = None) -> None:
+def _publish_offline(
+    client,
+    controller,
+    fuel,
+    settings,
+    room,
+    published: dict[str, str],
+    panel: PanelHub | None = None,
+    adaptive: AdaptiveController | None = None,
+) -> None:
     values = collect_state(
         None,
         None,
@@ -389,6 +542,7 @@ def _publish_offline(client, controller, fuel, settings, room, published: dict[s
         telemetry_stale=True,
         fan_on=False,
         frequency_hz=0,
+        adaptive=adaptive,
     )
     if panel is not None:
         panel.publish(values)

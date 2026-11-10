@@ -28,6 +28,14 @@ The climate card's target is the temperature. Run time is its own control, in mi
 
 Room temperature comes from Home Assistant sensors. Enter them on the add-on configuration page, for example `sensor.analog_input_8`. That list is read on every start. The coldest reading is used by default. That reading is sent to the heater as the comfort panel's cabin temperature, when it changes and about every thirty seconds. The add-on does not send stop because the room or the coolant reached a limit.
 
+## Adaptive coolant control
+
+Optional. Off by default. When enabled, the add-on learns a small model of the house and radiator network (UA, radiator coefficient C, and outdoor-bin corrections K) and chooses the liquid standby temperature so the heater stays in longer burns with fewer ignitions. It only changes the coolant target. Room hysteresis stays as you set it.
+
+Set an outdoor temperature entity on the configuration page. The algorithm writes a new coolant target while the heater is idle, before the next start. It can stop and restart only to raise the target after liquid standby while the room is still cold, or when power is clearly too low for thirty minutes. Turning the feature off restores your previous manual coolant target on the next idle. Learned values are kept in `/data/adaptive_model.json` across restarts. Use **Reset adaptive learning** to clear them.
+
+The sidebar and Home Assistant show adaptive status (`off` / `learning` / `active`), mode (`continuous` / `intermittent` / `maximum`), the last computed coolant target, ignitions per day, and the learned UA and C.
+
 The control unit keeps its own settings block. On startup the add-on reads that block and shows it on the add-on page and as Home Assistant entities: standby temperature (20–95 °C), auxiliary-heater mode and its standby temperature (80–95 °C), cabin-heater relay and the temperature that turns it on (30–60 °C), pump signal, pump-with-engine, pump-in-standby, and the alarm channel. Change them there. The change is written back to the same block, and bytes that were not changed stay as they were read. These values are not on the add-on configuration page, so that page cannot show a second copy. A write the heater does not accept while it is burning is tried again once the burner is idle. The room target, the run time, the cabin-temperature report, and the preheat duration are still ordinary run commands. They are not part of that stored block. Low supply voltage can still stop preheat and pump mode. Thermostat mode leaves voltage and coolant stops to the heater.
 
 There is no power-level command. Low, middle, and high are the heater's own stages and are published as sensors.

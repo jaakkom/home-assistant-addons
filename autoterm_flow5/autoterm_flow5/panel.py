@@ -19,8 +19,9 @@ _SWITCHES = {
     "pump_with_engine",
     "pump_standby",
     "alarm_channel",
+    "adaptive_enabled",
 }
-_PRESSED = {"stop", "fuel_reset", "fuel_refuel"}
+_PRESSED = {"stop", "fuel_reset", "fuel_refuel", "adaptive_reset"}
 _CHOICES = {
     "mode": {"thermostat", "preheat", "pump"},
     "aggregation": {"min", "avg", "max"},
@@ -30,6 +31,7 @@ _CHOICES = {
 }
 _NUMBERS = {
     "room_target",
+    "room_drop",
     "sensor_stale",
     "coolant_limit",
     "auxiliary_limit",
@@ -42,7 +44,10 @@ _NUMBERS = {
     "tank_capacity",
     "fuel_level",
     "simulate_room",
+    "simulate_outdoor",
     "simulate_fault",
+    "adaptive_coolant_min",
+    "adaptive_coolant_max",
 }
 
 
@@ -256,6 +261,7 @@ PAGE = """<!DOCTYPE html>
       <button type="submit" id="save"></button>
       <button type="button" class="ghost" id="refuel"></button>
       <button type="button" class="ghost" id="reset-fuel"></button>
+      <button type="button" class="ghost" id="reset-adaptive"></button>
     </div>
     <p class="note" id="note"></p>
   </form>
@@ -268,14 +274,16 @@ const TEXT = {
     lead: "Live measurements and the settings that also exist as Home Assistant entities.",
     status: "Status", temperatures: "Temperatures", electrical: "Pump and fans", fuelTitle: "Fuel",
     timeTitle: "Runtime", codes: "Codes", raw: "Raw frames", settings: "Settings",
+    adaptiveTitle: "Adaptive control",
     save: "Save", saved: "Saved", failed: "Could not save", stale: "Could not refresh the page",
     heatOn: "Heating on", heatOff: "Heating off", stop: "Stop", refuel: "Tank filled", reset: "Reset fuel total",
+    adaptiveReset: "Reset learned data",
     link: "Link", online: "Online", offline: "Offline", operating: "Operating mode", phase: "Phase",
     burner: "Burner", demand: "Heat demand", fault: "Fault", noFault: "No fault", lockout: "Lockout",
     telemetry: "Telemetry stale", glow: "Glow plug", fan: "Interior fan", simulation: "Simulation",
     on: "On", off: "Off", coolant: "Coolant", coolant_a: "Coolant A", coolant_b: "Coolant B",
     flame: "Flame", liquid: "Liquid sensor", overheat: "Overheat sensor", board: "Board", room: "Room",
-    request: "Requested temperature",
+    outdoor: "Outdoor", request: "Requested temperature",
     rising: "Rising sensor", voltage: "Voltage", pump: "Pump", fan_target: "Fan target",
     fan_actual: "Fan measured", fan_current: "Fan current", engine: "Engine state", relay: "Relay",
     consumption: "Consumption", per_minute: "Per minute", average: "Hour average", level: "Fuel level",
@@ -283,7 +291,11 @@ const TEXT = {
     elapsed_minutes: "Elapsed minutes", elapsed_seconds: "Elapsed seconds", runtime: "Runtime",
     cooldown: "Cooldown counter", state_code: "State code", substate: "Substate", fault_code: "Fault code",
     ext_fault: "Extended fault", ext_mode: "Extended mode",
-    mode: "Mode", aggregation: "Aggregation", room_target: "Room target",
+    adaptive_status: "Adaptive status", adaptive_mode: "Adaptive mode",
+    adaptive_coolant_target: "Adaptive coolant target", adaptive_ua: "UA", adaptive_c: "Radiator C",
+    adaptive_ignitions_day: "Ignitions / day", adaptive_avg_run_s: "Average run",
+    adaptive_room_error: "Room error",
+    mode: "Mode", aggregation: "Aggregation", room_target: "Room target", room_drop: "Room hysteresis",
     sensor_stale: "Sensor stale (min)", preheat_minutes: "Preheat (min)",
     run_minutes: "Run time (min, 0 unlimited)", coolant_limit: "Standby temperature",
     auxiliary_mode: "Auxiliary heater", auxiliary_limit: "Auxiliary standby",
@@ -294,20 +306,24 @@ const TEXT = {
     shutdown_voltage_seconds: "Shutdown voltage time (s)",
     tank_capacity: "Tank capacity (L)", fuel_level: "Fuel in tank (L)", pump_dose: "Pump dose (mL)",
     circulation: "Circulation while waiting", debug: "Debug log",
-    simulate_room: "Simulated room", simulate_fault: "Simulated fault"
+    adaptive_enabled: "Adaptive coolant control",
+    adaptive_coolant_min: "Adaptive coolant min", adaptive_coolant_max: "Adaptive coolant max",
+    simulate_room: "Simulated room", simulate_outdoor: "Simulated outdoor", simulate_fault: "Simulated fault"
   },
   fi: {
     lead: "Mittaukset ja asetukset, jotka ovat myös Home Assistantin entiteettejä.",
     status: "Tila", temperatures: "Lämpötilat", electrical: "Pumppu ja puhaltimet", fuelTitle: "Polttoaine",
     timeTitle: "Käyntiaika", codes: "Koodit", raw: "Raakakehykset", settings: "Asetukset",
+    adaptiveTitle: "Adaptiivinen ohjaus",
     save: "Tallenna", saved: "Tallennettu", failed: "Tallennus ei onnistunut", stale: "Sivua ei saatu päivitettyä",
     heatOn: "Lämmitys päälle", heatOff: "Lämmitys pois", stop: "Pysäytä", refuel: "Tankki täytetty", reset: "Nollaa kulutuslaskuri",
+    adaptiveReset: "Nollaa opitut tiedot",
     link: "Yhteys", online: "Yhteydessä", offline: "Poissa", operating: "Toimintatila", phase: "Vaihe",
     burner: "Poltin", demand: "Lämmön tarve", fault: "Vika", noFault: "Ei vikaa", lockout: "Lukitus",
     telemetry: "Telemetria vanhentunut", glow: "Hehkutulppa", fan: "Sisäpuhallin", simulation: "Simulointi",
     on: "Päällä", off: "Pois", coolant: "Neste", coolant_a: "Neste A", coolant_b: "Neste B",
     flame: "Liekki", liquid: "Nesteanturi", overheat: "Ylikuumenemisanturi", board: "Piirilevy", room: "Huone",
-    request: "Pyyntilämpötila",
+    outdoor: "Ulko", request: "Pyyntilämpötila",
     rising: "Nouseva anturi", voltage: "Jännite", pump: "Pumppu", fan_target: "Puhaltimen tavoite",
     fan_actual: "Puhallin mitattu", fan_current: "Puhallinvirta", engine: "Moottorin tila", relay: "Rele",
     consumption: "Kulutus", per_minute: "Minuutissa", average: "Tunnin keskiarvo", level: "Polttoaine",
@@ -315,7 +331,11 @@ const TEXT = {
     elapsed_minutes: "Käynti (min)", elapsed_seconds: "Käynti (s)", runtime: "Käyntiaika",
     cooldown: "Jäähdytyslaskuri", state_code: "Tilakoodi", substate: "Alitila", fault_code: "Vikakoodi",
     ext_fault: "Laajennettu vikakoodi", ext_mode: "Laajennettu tila",
-    mode: "Ohjaus", aggregation: "Yhdistäminen", room_target: "Huonetavoite",
+    adaptive_status: "Adaptiivinen tila", adaptive_mode: "Toimintatila",
+    adaptive_coolant_target: "Laskettu nestetavoite", adaptive_ua: "UA", adaptive_c: "Patterikerroin C",
+    adaptive_ignitions_day: "Sytytyksiä / vrk", adaptive_avg_run_s: "Keskim. käynti",
+    adaptive_room_error: "Huonevirhe",
+    mode: "Ohjaus", aggregation: "Yhdistäminen", room_target: "Huonetavoite", room_drop: "Huonehystereesi",
     sensor_stale: "Anturin vanheneminen (min)", preheat_minutes: "Esilämmitys (min)",
     run_minutes: "Käyntiaika (min, 0 ääretön)", coolant_limit: "Odotuslämpötila",
     auxiliary_mode: "Lisälämmitys", auxiliary_limit: "Lisälämmityksen odotus",
@@ -326,7 +346,9 @@ const TEXT = {
     shutdown_voltage_seconds: "Sammutusjännitteen aika (s)",
     tank_capacity: "Tankin koko (l)", fuel_level: "Polttoainetta tankissa (l)", pump_dose: "Pumpun annos (ml)",
     circulation: "Kierto odotuksessa", debug: "Debug-loki",
-    simulate_room: "Simuloitu huone", simulate_fault: "Simuloitu vika"
+    adaptive_enabled: "Adaptiivinen nestelämmön ohjaus",
+    adaptive_coolant_min: "Nestetavoitteen alaraja", adaptive_coolant_max: "Nestetavoitteen yläraja",
+    simulate_room: "Simuloitu huone", simulate_outdoor: "Simuloitu ulko", simulate_fault: "Simuloitu vika"
   }
 };
 const T = TEXT[LANG] || TEXT.en;
@@ -341,8 +363,16 @@ const GROUPS = [
   ["temperatures", [
     ["coolant", "coolant", " °C"], ["coolant_a", "coolant_a", " °C"], ["coolant_b", "coolant_b", " °C"],
     ["flame", "flame", " °C"], ["liquid", "liquid", " °C"], ["overheat", "overheat", " °C"],
-    ["board", "board", " °C"], ["room", "room", " °C"], ["room_target", "request", " °C"],
-    ["rising_sensor", "rising", " °C"]
+    ["board", "board", " °C"], ["room", "room", " °C"], ["outdoor", "outdoor", " °C"],
+    ["room_target", "request", " °C"], ["rising_sensor", "rising", " °C"]
+  ]],
+  ["adaptiveTitle", [
+    ["adaptive_status", "adaptive_status"], ["adaptive_mode", "adaptive_mode"],
+    ["adaptive_coolant_target", "adaptive_coolant_target", " °C"],
+    ["adaptive_ua", "adaptive_ua", " kW/°C"], ["adaptive_c", "adaptive_c"],
+    ["adaptive_ignitions_day", "adaptive_ignitions_day"],
+    ["adaptive_avg_run_s", "adaptive_avg_run_s", " s"],
+    ["adaptive_room_error", "adaptive_room_error", " °C"]
   ]],
   ["electrical", [
     ["voltage", "voltage", " V"], ["pump_hz", "pump", " Hz"], ["fan_target", "fan_target"],
@@ -367,10 +397,14 @@ const FIELDS = [
   {key: "mode", state: "mode_select", type: "select", options: ["thermostat", "preheat", "pump"]},
   {key: "aggregation", type: "select", options: ["min", "avg", "max"]},
   {key: "room_target", min: 0, max: 40, step: 0.5},
+  {key: "room_drop", min: 0, max: 10, step: 0.5},
   {key: "run_minutes", min: 0, max: 720, step: 1},
   {key: "sensor_stale", min: 1, max: 120, step: 1},
   {key: "preheat_minutes", min: 1, max: 480, step: 1},
   {key: "coolant_limit", min: 20, max: 95, step: 1},
+  {key: "adaptive_enabled", type: "switch"},
+  {key: "adaptive_coolant_min", min: 20, max: 95, step: 1},
+  {key: "adaptive_coolant_max", min: 20, max: 95, step: 1},
   {key: "auxiliary_mode", type: "select", options: ["off", "auto", "manual"]},
   {key: "auxiliary_limit", min: 80, max: 95, step: 1},
   {key: "relay_mode", type: "select", options: ["auto", "off"]},
@@ -385,6 +419,7 @@ const FIELDS = [
   {key: "fuel_level", min: 0, max: 500, step: "any"},
   {key: "pump_dose", min: 0.01, max: 0.2, step: 0.001},
   {key: "simulate_room", min: 0, max: 40, step: 0.5},
+  {key: "simulate_outdoor", min: -40, max: 40, step: 0.5},
   {key: "simulate_fault", min: 0, max: 255, step: 1},
   {key: "circulation", type: "switch"},
   {key: "debug", type: "switch"}
@@ -561,6 +596,7 @@ document.getElementById("set-title").textContent = text("settings");
 document.getElementById("save").textContent = text("save");
 document.getElementById("refuel").textContent = text("refuel");
 document.getElementById("reset-fuel").textContent = text("reset");
+document.getElementById("reset-adaptive").textContent = text("adaptiveReset");
 document.getElementById("stop").textContent = text("stop");
 document.getElementById("heat").textContent = text("heatOn");
 buildMeasurements();
@@ -583,6 +619,7 @@ document.getElementById("settings").addEventListener("submit", function (event) 
 });
 document.getElementById("refuel").onclick = function () { send([{key: "fuel_refuel", value: "pressed"}]); };
 document.getElementById("reset-fuel").onclick = function () { send([{key: "fuel_reset", value: "pressed"}]); };
+document.getElementById("reset-adaptive").onclick = function () { send([{key: "adaptive_reset", value: "pressed"}]); };
 refresh();
 setInterval(refresh, 2000);
 </script>

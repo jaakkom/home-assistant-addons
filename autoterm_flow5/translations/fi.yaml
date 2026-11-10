@@ -9,6 +9,9 @@ configuration:
       simulate_room_temperature:
         name: Simuloitu huonelämpö
         description: Huonelämpö, kun simulointi on päällä eikä Home Assistantin lämpötilaentiteettejä ole asetettu. Arvoa voi muuttaa myös Simulated room temperature -numerosta.
+      simulate_outdoor_temperature:
+        name: Simuloitu ulkolämpö
+        description: Ulkolämpö, kun simulointi on päällä eikä ulkolämpöentiteettiä ole asetettu.
       simulate_fault_code:
         name: Simuloitu vikakoodi
         description: Vikakoodi, jonka simuloitu lämmitin ilmoittaa. Nolla tarkoittaa ei vikaa. Asetusta ei käytetä, kun simulointi on pois päältä.
@@ -35,12 +38,24 @@ configuration:
       temperature_entities:
         name: Lämpötilaentiteetit
         description: Pilkulla erotetut Home Assistant -entiteetit, jotka ohjaavat lämmitintä.
+      outdoor_temperature_entity:
+        name: Ulkolämpötilaentiteetti
+        description: Home Assistant -entiteetti ulkolämpötilalle. Adaptiivinen nestelämmön ohjaus käyttää sitä.
       aggregation:
         name: Lämpötilan yhdistely
         description: min käyttää kylmintä, avg keskiarvoa ja max kuuminta anturia.
       room_target:
         name: Huoneen tavoite
         description: Ensimmäinen tavoitelämpötila, °C.
+      adaptive_enabled:
+        name: Adaptiivinen nestelämmön ohjaus
+        description: Säätää nestetavoitetta automaattisesti pidempiä käyntijaksoja ja vähemmän sytytyksiä varten. Oletus pois.
+      adaptive_coolant_min:
+        name: Nestetavoitteen alaraja
+        description: Matalin nestetavoite, jonka adaptiivinen ohjaus saa valita (°C).
+      adaptive_coolant_max:
+        name: Nestetavoitteen yläraja
+        description: Korkein nestetavoite, jonka adaptiivinen ohjaus saa valita (°C).
   timing:
     name: Käyntiajat
     description: Esilämmityksen kesto ja se, milloin huonelukema on liian vanha lähetettäväksi.
