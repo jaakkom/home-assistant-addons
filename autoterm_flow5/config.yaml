@@ -1,5 +1,5 @@
 name: Autoterm Flow 5
-version: "0.4.21"
+version: "0.4.22"
 slug: autoterm_flow5
 description: >-
   Replaces the Autoterm Flow 5 control panel. Controls and monitors the
@@ -43,17 +43,8 @@ options:
     preheat_minutes: 30
     circulation_pump: false
   protection:
-    coolant_limit: 88
-    auxiliary_mode: off
-    auxiliary_limit: 95
-    relay_mode: auto
-    pump_signal: plain
-    pump_with_engine: false
-    pump_standby: true
-    alarm_channel: true
     shutdown_voltage: 11.5
     shutdown_voltage_seconds: 30
-    fan_temperature: 40
   fuel:
     pump_dose_ml: 0.044
     tank_capacity_l: 0
@@ -81,17 +72,8 @@ schema:
     preheat_minutes: int(1,480)
     circulation_pump: bool
   protection:
-    coolant_limit: float(20,95)
-    auxiliary_mode: list(off|auto|manual)
-    auxiliary_limit: float(80,95)
-    relay_mode: list(auto|off)
-    pump_signal: list(plain|pwm)
-    pump_with_engine: bool
-    pump_standby: bool
-    alarm_channel: bool
     shutdown_voltage: float(9,30)
     shutdown_voltage_seconds: int(1,600)
-    fan_temperature: float(30,60)
   fuel:
     pump_dose_ml: float(0.01,0.2)
     tank_capacity_l: float(0,500)
