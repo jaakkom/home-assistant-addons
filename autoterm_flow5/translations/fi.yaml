@@ -55,42 +55,15 @@ configuration:
         name: Kierto odotuksessa
         description: Käytä kiertovesipumppua, kun lämpöä vielä tarvitaan ja poltin on sammuksissa.
   protection:
-    name: Lämmittimen asetukset
-    description: Arvot luetaan ohjausyksikön muistista ja kirjoitetaan takaisin, kun niitä muutetaan.
+    name: Jännite
+    description: Paikallinen suoja esilämmitykselle ja pumpputilalle. Lämmittimen omat lämpötila-asetukset ovat lisäosan sivulla ja Home Assistantin entiteeteissä.
     fields:
-      coolant_limit:
-        name: Odotuslämpötila
-        description: Nesteen lämpötila, jossa poltin siirtyy odotukseen. Alue 20–95 °C.
-      auxiliary_mode:
-        name: Lisälämmitys
-        description: Lisälämmitys pois, automaattinen tai käsikäyttö.
-      auxiliary_limit:
-        name: Lisälämmityksen odotus
-        description: Odotuslämpötila lisälämmityksenä. Alue 80–95 °C.
-      relay_mode:
-        name: Ohjaamon rele
-        description: Ohjaamon lämmittimen rele automaattisesti tai pois.
-      pump_signal:
-        name: Pumpun signaali
-        description: Nestepumpun ohjaus tavallisena tai PWM-signaalina.
-      pump_with_engine:
-        name: Pumppu moottorin kanssa
-        description: Käytä lämmittimen pumppua myös auton moottorin käydessä.
-      pump_standby:
-        name: Pumppu odotuksessa
-        description: Jätä nestepumppu pyörimään, kun poltin on siirtynyt odotukseen.
-      alarm_channel:
-        name: Hälytyskanava
-        description: Salli käynnistys kytkimellä tai hälyttimen kanavalla.
       shutdown_voltage:
         name: Sammutusjännite
-        description: Pysäytä poltin, jos syöttöjännite pysyy tämän alapuolella.
+        description: Pysäytä esilämmitys tai pumpputila, jos syöttöjännite pysyy tämän alapuolella.
       shutdown_voltage_seconds:
         name: Sammutusjännitteen aika
         description: Kuinka kauan jännitteen pitää olla alhaalla ennen pysäytystä.
-      fan_temperature:
-        name: Ohjaamon puhallin
-        description: Nesteen lämpötila, jossa ohjaamon lämmittimen rele menee päälle. Alue 30–60 °C.
   fuel:
     name: Polttoaine
     description: Pumpun annos ja tankin koko, joilla kulutus ja polttoaineen määrä lasketaan.

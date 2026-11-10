@@ -55,42 +55,15 @@ configuration:
         name: Circulation while waiting
         description: Run the coolant pump while heat is still required and the burner is idle.
   protection:
-    name: Heater settings
-    description: These values are read from the control unit and written back when changed.
+    name: Voltage
+    description: Local protection for preheat and pump mode. The heater's own temperature settings are on the add-on page and the Home Assistant entities.
     fields:
-      coolant_limit:
-        name: Standby temperature
-        description: Coolant temperature where the burner goes to standby. Range 20–95 °C.
-      auxiliary_mode:
-        name: Auxiliary heater
-        description: Off, automatic, or manual auxiliary-heater mode.
-      auxiliary_limit:
-        name: Auxiliary standby
-        description: Standby temperature while running as an auxiliary heater. Range 80–95 °C.
-      relay_mode:
-        name: Cabin heater relay
-        description: Automatic cabin-heater relay, or off.
-      pump_signal:
-        name: Pump signal
-        description: Plain or PWM drive for the coolant pump.
-      pump_with_engine:
-        name: Pump with engine
-        description: Also run the heater pump while the vehicle engine is running.
-      pump_standby:
-        name: Pump in standby
-        description: Keep the coolant pump running after the burner goes to standby.
-      alarm_channel:
-        name: Alarm channel
-        description: Allow a switch or alarm channel to start the heater.
       shutdown_voltage:
         name: Shutdown voltage
-        description: Stop the burner when the supply stays below this voltage.
+        description: Stop preheat or pump mode when the supply stays below this voltage.
       shutdown_voltage_seconds:
         name: Shutdown voltage time
         description: How long the voltage must stay low before stopping.
-      fan_temperature:
-        name: Cabin fan temperature
-        description: Coolant temperature that turns the cabin heater relay on. Range 30–60 °C.
   fuel:
     name: Fuel
     description: Pump dose and tank size used to calculate consumption and the fuel level.
