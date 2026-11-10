@@ -378,7 +378,7 @@ const FIELDS = [
   {key: "shutdown_voltage", min: 9, max: 30, step: 0.1},
   {key: "shutdown_voltage_seconds", min: 1, max: 600, step: 1},
   {key: "tank_capacity", min: 0, max: 500, step: 0.5},
-  {key: "fuel_level", min: 0, max: 500, step: 0.1},
+  {key: "fuel_level", min: 0, max: 500, step: "any"},
   {key: "pump_dose", min: 0.01, max: 0.2, step: 0.001},
   {key: "simulate_room", min: 0, max: 40, step: 0.5},
   {key: "simulate_fault", min: 0, max: 255, step: 1},
