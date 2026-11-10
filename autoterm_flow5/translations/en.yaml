@@ -56,6 +56,18 @@ configuration:
       adaptive_coolant_max:
         name: Adaptive coolant maximum
         description: Highest liquid target the adaptive algorithm may choose (°C).
+      adaptive_min_burn_minutes:
+        name: Minimum burn before a stop
+        description: Adaptive control never stops the heater before the burn phase has lasted this many minutes.
+      adaptive_max_stops_6h:
+        name: Maximum stops per 6 h
+        description: When reached, active corrections pause and a warning is logged.
+      adaptive_rise_offset:
+        name: RISE mode threshold
+        description: When the room is this far below target (°C), a high liquid target is used with no active corrections.
+      adaptive_rise_target:
+        name: RISE mode liquid target
+        description: Liquid target used in RISE mode (°C).
   timing:
     name: Run times
     description: How long a preheat runs, and when a room sensor reading is too old to send.

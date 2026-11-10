@@ -183,6 +183,27 @@ class SimulationLoopTests(unittest.TestCase):
         self.assertGreater(float(later.values["fuel_total_ml"]), 0)
         self.assertEqual(later.values["fan_request"], "ON")
 
+    def test_adaptive_start_waits_for_the_written_coolant_target(self):
+        from autoterm_flow5.adaptive import AdaptiveController, config_from_settings
+
+        self.settings.adaptive_enabled = True
+        self.settings.room_target = 20
+        with tempfile.TemporaryDirectory() as tmp:
+            adaptive = AdaptiveController(Path(tmp) / "model.json", config_from_settings(self.settings))
+            adaptive.config.startup_grace_s = 0
+            self.controller.set_heat(True, self.now)
+            starts_before_confirm = 0
+            for _ in range(60):
+                step(self.now, self.link, self.controller, self.settings, self.fuel, self.faults,
+                     self.link_notice, 19.5, 0.0, -5.0, adaptive)
+                self.now += 1
+                if "start" in self.heater.events and adaptive.model.last_target != adaptive._actual_coolant:
+                    starts_before_confirm += 1
+            self.assertIn("start", self.heater.events)
+            self.assertEqual(starts_before_confirm, 0)
+            self.assertEqual(self.controller.confirmed_standby(), adaptive.model.last_target)
+            self.assertNotEqual(adaptive.model.last_target, 88.0)
+
     def test_coolant_limit_does_not_stop_thermostat_mode(self):
         self.controller.set_heat(True, self.now)
         for _ in range(40):

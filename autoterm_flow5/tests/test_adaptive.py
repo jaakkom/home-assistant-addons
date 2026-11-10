@@ -7,11 +7,16 @@ import unittest
 from pathlib import Path
 
 from autoterm_flow5.adaptive import (
+    FREQ_HIGH,
+    FREQ_LOW,
+    FREQ_MID,
     P_MIN,
     AdaptiveConfig,
     AdaptiveController,
+    classify_step,
     default_c,
     equilibrium_temp,
+    is_burning,
     nearest_step,
     power_kw,
 )
@@ -20,21 +25,33 @@ from autoterm_flow5.protocol import (
     FACTORY_SETTINGS,
     decode_heater_settings,
     decode_status,
+    requested_temperature,
     stop_command,
 )
 from autoterm_flow5.settings import Settings
 
+IDLE = (0, 1)
+GLOW = (2, 1)
+IGNITION = (2, 3)
+CHAMBER = (2, 6)
+LOW = (3, 0)
+MIDDLE = (3, 8)
+HIGH = (3, 2)
+WAITING = (3, 5)
+COOLDOWN = (4, 0)
 
-def status(state=0, substate=1, fault=0, coolant=40, burner=None):
+PHASES = {IDLE: "idle", GLOW: "starting", IGNITION: "starting", CHAMBER: "starting",
+          LOW: "running", MIDDLE: "running", HIGH: "running", WAITING: "running",
+          COOLDOWN: "cooldown"}
+
+
+def status(state=0, substate=1, coolant=40):
     raw = bytearray(18)
     raw[0] = state
     raw[1] = substate
-    raw[2] = fault
     raw[3] = coolant
     raw[4] = coolant
-    if burner is None:
-        burner = state in (2, 3)
-    raw[12] = 0xFF if burner else 0
+    raw[12] = 0xFF if state in (2, 3) else 0
     return decode_status(bytes(raw))
 
 
@@ -44,190 +61,276 @@ class AdaptiveMathTests(unittest.TestCase):
         self.assertAlmostEqual(power_kw(1.8), P_MIN)
         self.assertEqual(power_kw(0), 0.0)
 
-    def test_nearest_step(self):
-        self.assertEqual(nearest_step(1.7), 1.8)
-        self.assertEqual(nearest_step(2.9), 2.8)
-        self.assertEqual(nearest_step(4.2), 4.4)
+    def test_steps_follow_the_state_name_then_the_frequency(self):
+        self.assertEqual(classify_step(MIDDLE, 2.6), FREQ_MID)
+        self.assertEqual(classify_step(LOW, 2.6), FREQ_LOW)
+        self.assertEqual(classify_step((3, 9), 3.1), FREQ_MID)
+        self.assertEqual(nearest_step(4.2), FREQ_HIGH)
+
+    def test_startup_and_waiting_are_not_burning(self):
+        for state in (GLOW, IGNITION, CHAMBER, WAITING, COOLDOWN, IDLE):
+            self.assertFalse(is_burning(state), state)
+        for state in (LOW, MIDDLE, HIGH):
+            self.assertTrue(is_burning(state), state)
 
     def test_default_c_gives_about_50_c_at_2_kw(self):
-        temp = equilibrium_temp(2.0, 20.0, default_c())
-        self.assertAlmostEqual(temp, 50.0, places=0)
+        self.assertAlmostEqual(equilibrium_temp(2.0, 20.0, default_c()), 50.0, places=0)
 
 
 class AdaptiveControllerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.path = Path(self.tmp.name) / "adaptive.json"
-        self.config = AdaptiveConfig(
-            enabled=True,
-            coolant_min=45,
-            coolant_max=85,
-            margin_c=3,
-            base_step_c=2,
-            power_confirm_s=60,
-            power_lockout_s=120,
-            soot_interval_s=24 * 3600,
-        )
+        self.config = AdaptiveConfig(enabled=True, startup_grace_s=0)
         self.adaptive = AdaptiveController(self.path, self.config)
+        self.now = 0.0
+        self.confirmed = 60.0
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _tick(self, now, **kwargs):
-        defaults = dict(
-            phase="idle",
-            burner_active=False,
+    def tick(self, state, seconds=1.0, **kwargs):
+        self.now += seconds
+        values = dict(
+            state=state,
+            phase=PHASES[state],
             fault=0,
             heat_enabled=True,
             mode="thermostat",
-            room_c=19.0,
+            room_c=19.5,
             outdoor_c=-5.0,
             coolant_c=40.0,
             pump_hz=0.0,
             room_target=20.0,
             hysteresis_c=2.0,
-            current_coolant_limit=60.0,
-            sensors_ok=True,
+            confirmed_coolant=self.confirmed,
         )
-        defaults.update(kwargs)
-        return self.adaptive.tick(now, **defaults)
+        values.update(kwargs)
+        return self.adaptive.tick(self.now, **values)
 
-    def test_disabled_does_not_write_or_stop(self):
+    def run_for(self, state, seconds, step=10.0, **kwargs):
+        actions = []
+        end = self.now + seconds
+        while self.now < end:
+            actions.append(self.tick(state, step, **kwargs))
+        return actions
+
+    def ignite(self, **kwargs):
+        self.tick(IDLE, **kwargs)
+        self.adaptive._verify = None
+        self.adaptive._wrote_target_this_rest = True
+        self.tick(GLOW, **kwargs)
+
+    def test_disabled_never_writes_holds_or_stops(self):
         self.adaptive.config.enabled = False
         self.adaptive._enabled_was = False
-        actions = self._tick(1.0, phase="running", burner_active=True, pump_hz=4.4, coolant_c=55)
-        self.assertFalse(actions.stop)
-        self.assertIsNone(actions.coolant_limit)
+        actions = [self.tick(IDLE)] + self.run_for(MIDDLE, 3600, pump_hz=3.0)
+        self.assertFalse(any(a.stop or a.coolant_limit is not None or a.hold_start for a in actions))
 
-    def test_idle_writes_computed_target_when_enabled(self):
-        actions = self._tick(10.0, phase="idle", current_coolant_limit=88.0)
-        self.assertIsNotNone(actions.coolant_limit)
-        self.assertGreaterEqual(actions.coolant_limit, 45.0)
-        self.assertLessEqual(actions.coolant_limit, 85.0)
+    def test_middle_stage_at_cold_liquid_is_not_standby(self):
+        # The log: Middle at 25 °C liquid with a 40 °C target was taken as standby.
+        self.confirmed = 40.0
+        self.ignite(room_c=11.2, room_target=14)
+        self.run_for(CHAMBER, 120, pump_hz=1.8, coolant_c=22, room_c=11.2, room_target=14)
+        actions = self.run_for(MIDDLE, 600, pump_hz=3.0, coolant_c=25, room_c=11.2, room_target=14)
+        self.assertFalse(any(a.stop for a in actions))
+        self.assertFalse(self.adaptive._cycle.standby_seen)
 
-    def test_continuous_target_stays_above_min_power_equilibrium(self):
-        # Need = 0.15 * 25 = 3.75 kW, between P_min and P_max.
-        self.adaptive.model.ua = 0.15
-        self.adaptive.model.c = default_c()
-        self.adaptive.model.reliable = True
-        target = self.adaptive._compute_target(-5.0, 20.0, 20.0)
-        floor = equilibrium_temp(P_MIN, 20.0, self.adaptive.model.c) + 3.0
-        self.assertEqual(self.adaptive.model.last_mode, "continuous")
-        self.assertGreaterEqual(target, floor - 0.1)
+    def test_startup_time_is_not_in_the_shares(self):
+        self.ignite()
+        self.run_for(CHAMBER, 300, pump_hz=1.8, coolant_c=30)
+        self.run_for(HIGH, 600, pump_hz=4.4, coolant_c=45)
+        cycle = self.adaptive._cycle
+        self.assertAlmostEqual(cycle.burn_s, 600, delta=10)
+        self.assertEqual(cycle.time_low, 0.0)
+        self.tick(COOLDOWN, coolant_c=45)
+        self.tick(IDLE, coolant_c=45)
+        entry = self.adaptive.model.cycle_log[-1]
+        self.assertEqual(entry["share_1_8"], 0.0)
+        self.assertAlmostEqual(entry["share_4_4"], 1.0, places=2)
 
-    def test_intermittent_when_heat_need_below_pmin(self):
-        self.adaptive.model.ua = 0.05
-        self.adaptive.model.reliable = True
-        target = self.adaptive._compute_target(10.0, 20.0, 20.0)
-        self.assertEqual(self.adaptive.model.last_mode, "intermittent")
-        self.assertGreaterEqual(target, 45.0)
+    def test_standby_needs_hot_liquid_zero_pump_and_a_wait_state(self):
+        self.ignite()
+        self.run_for(LOW, 600, pump_hz=1.8, coolant_c=55)
+        self.tick(WAITING, pump_hz=0.0, coolant_c=50)
+        self.assertFalse(self.adaptive._cycle.standby_seen)
+        self.tick(WAITING, pump_hz=0.0, coolant_c=59)
+        self.assertTrue(self.adaptive._cycle.standby_seen)
 
-    def test_maximum_when_heat_need_above_pmax(self):
-        self.adaptive.model.ua = 0.5
-        self.adaptive.model.reliable = True
-        target = self.adaptive._compute_target(-20.0, 20.0, 20.0)
-        self.assertEqual(self.adaptive.model.last_mode, "maximum")
-        self.assertEqual(target, 85.0)
+    def test_no_stop_before_twenty_minutes_of_burn(self):
+        self.ignite()
+        self.run_for(LOW, 600, pump_hz=1.8, coolant_c=58)
+        actions = self.run_for(WAITING, 60, pump_hz=0.0, coolant_c=60)
+        self.assertFalse(any(a.stop for a in actions))
 
-    def test_liquid_standby_triggers_stop_and_raise(self):
-        # Start a cycle first.
-        self._tick(100.0, phase="running", burner_active=True, pump_hz=1.8, coolant_c=58, room_c=18)
-        actions = self._tick(
-            160.0,
-            phase="cooldown",
-            burner_active=False,
-            pump_hz=1.8,
-            coolant_c=60,
-            room_c=18,
-            current_coolant_limit=58,
-        )
-        self.assertTrue(actions.stop)
-        self.assertTrue(self.adaptive._awaiting_idle_write)
+    def test_standby_after_long_burn_stops_once_and_raises(self):
+        self.ignite()
+        self.run_for(LOW, 1300, pump_hz=1.8, coolant_c=58)
+        actions = self.run_for(WAITING, 30, pump_hz=0.0, coolant_c=60)
+        stops = [a for a in actions if a.stop]
+        self.assertEqual(len(stops), 1)
+        self.assertGreater(self.adaptive._pending_target, 60.0)
 
-    def test_after_adaptive_stop_idle_writes_and_restarts(self):
-        self._tick(100.0, phase="running", burner_active=True, pump_hz=1.8, coolant_c=58, room_c=18)
-        self._tick(160.0, phase="cooldown", burner_active=False, pump_hz=1.8, coolant_c=60, room_c=18)
-        actions = self._tick(200.0, phase="idle", burner_active=False, pump_hz=0, coolant_c=55, room_c=18)
-        self.assertIsNotNone(actions.coolant_limit)
-        self.assertTrue(actions.start)
+    def test_stops_share_one_lockout_and_a_six_hour_quota(self):
+        self.adaptive.model.active_stops.extend([self.now - 100])
+        self.assertFalse(self.adaptive._stop_allowed(self.now))
+        self.adaptive.model.active_stops.clear()
+        self.adaptive.model.active_stops.extend([self.now - 5 * 3600, self.now - 2 * 3600])
+        with self.assertLogs("autoterm_flow5.adaptive", "WARNING"):
+            self.assertFalse(self.adaptive._stop_allowed(self.now))
+        self.adaptive.model.active_stops.clear()
+        self.adaptive.model.active_stops.append(self.now - 2 * 3600)
+        self.assertTrue(self.adaptive._stop_allowed(self.now))
 
-    def test_high_share_cycle_lowers_target(self):
-        self.adaptive.model.reliable = True
-        self._tick(0.0, phase="running", burner_active=True, pump_hz=4.4, coolant_c=65, room_c=18)
-        # Accumulate almost entirely high-frequency time.
-        for second in range(1, 100):
-            self._tick(
-                float(second),
-                phase="running",
-                burner_active=True,
-                pump_hz=4.4,
-                coolant_c=65 + second * 0.01,
-                room_c=18 + second * 0.01,
-            )
-        self.assertIsNotNone(self.adaptive._cycle)
-        self.adaptive._cycle.coolant_target = 80.0
-        self.adaptive._cycle.coolant_max = 68.0
-        self.adaptive._finish_cycle(100.0, 20.5, "thermostat", skip_learning=False)
-        # Desired is max_liquid-2=66, but the drop is capped at 5 °C per cycle.
-        self.assertAlmostEqual(self.adaptive.model.last_target, 75.0)
+    def test_rest_writes_holds_and_releases_after_read_back(self):
+        self.confirmed = 40.0
+        first = self.tick(IDLE)
+        self.assertIsNotNone(first.coolant_limit)
+        self.assertTrue(first.hold_start)
+        target = first.coolant_limit
+        waiting = self.tick(IDLE, confirmed_coolant=None)
+        self.assertTrue(waiting.hold_start)
+        done = self.tick(IDLE, confirmed_coolant=target)
+        self.assertFalse(done.hold_start)
 
-    def test_model_persists(self):
+    def test_a_rejected_write_is_retried_three_times_then_started(self):
+        self.confirmed = 40.0
+        first = self.tick(IDLE)
+        self.assertIsNotNone(first.coolant_limit)
+        retries = [self.tick(IDLE, confirmed_coolant=40.0) for _ in range(3)]
+        self.assertTrue(all(a.coolant_limit is not None for a in retries))
+        with self.assertLogs("autoterm_flow5.adaptive", "ERROR"):
+            last = self.tick(IDLE, confirmed_coolant=40.0)
+        self.assertFalse(last.hold_start)
+        self.assertTrue(self.adaptive._next_cycle_unlearned)
+        self.tick(GLOW, confirmed_coolant=40.0)
+        self.assertFalse(self.adaptive._cycle.learned)
+        self.assertEqual(self.adaptive._cycle.coolant_target, 40.0)
+
+    def test_adaptive_restart_waits_for_the_read_back(self):
+        self.ignite()
+        self.run_for(LOW, 1300, pump_hz=1.8, coolant_c=58)
+        self.run_for(WAITING, 30, pump_hz=0.0, coolant_c=60)
+        target = self.adaptive._pending_target
+        self.tick(COOLDOWN, coolant_c=58)
+        write = self.tick(IDLE, coolant_c=55)
+        self.assertEqual(write.coolant_limit, target)
+        self.assertFalse(write.start)
+        ready = self.tick(IDLE, coolant_c=55, confirmed_coolant=target)
+        self.assertTrue(ready.start)
+
+    def test_raise_never_lowers(self):
+        self.adaptive._actual_coolant = 54.0
+        self.adaptive.model.last_target = 54.0
+        target = self.adaptive._raise_target("liquid_standby_raise", 6.4, 11.0, 14.0)
+        self.assertGreater(target, 54.0)
+
+    def test_raise_at_the_limit_is_skipped(self):
+        self.adaptive._actual_coolant = 85.0
+        self.assertIsNone(self.adaptive._raise_target("power_raise", -5.0, 18.0, 20.0))
+
+    def test_rise_mode_when_room_is_far_below_target(self):
+        actions = self.tick(IDLE, room_c=11.2, room_target=14.0, outdoor_c=6.4)
+        self.assertEqual(self.adaptive.model.last_mode, "rise")
+        self.assertEqual(actions.coolant_limit, 75.0)
+
+    def test_rise_mode_ends_near_target(self):
+        self.tick(IDLE, room_c=11.2, room_target=14.0)
+        self.assertTrue(self.adaptive._rise_active)
+        self.tick(LOW, room_c=13.8, room_target=14.0, pump_hz=1.8)
+        self.assertFalse(self.adaptive._rise_active)
+
+    def test_rise_mode_makes_no_corrections(self):
+        self.confirmed = 75.0
+        self.tick(IDLE, room_c=11.0, room_target=14.0)
+        self.tick(GLOW, room_c=11.0, room_target=14.0)
+        self.run_for(LOW, 1300, pump_hz=1.8, coolant_c=74, room_c=11.0, room_target=14.0)
+        actions = self.run_for(WAITING, 60, pump_hz=0.0, coolant_c=76, room_c=11.0, room_target=14.0)
+        self.assertFalse(any(a.stop for a in actions))
+
+    def test_enabling_during_a_burn_neither_stops_nor_learns(self):
+        self.adaptive.config.enabled = False
+        self.adaptive._enabled_was = False
+        self.ignite()
+        self.run_for(LOW, 300, pump_hz=1.8, coolant_c=50)
+        self.adaptive.on_enabled_changed(True, 60.0)
+        actions = self.run_for(LOW, 1300, pump_hz=1.8, coolant_c=58)
+        actions += self.run_for(WAITING, 60, pump_hz=0.0, coolant_c=60)
+        self.assertFalse(any(a.stop for a in actions))
+        self.assertTrue(self.adaptive._cycle.observe_only)
+
+    def test_safe_coolant_waits_for_the_startup_grace(self):
+        adaptive = AdaptiveController(self.path, AdaptiveConfig(enabled=True, startup_grace_s=30))
+        common = dict(phase="unknown", fault=0, heat_enabled=True, mode="thermostat", room_c=19.0,
+                      outdoor_c=0.0, coolant_c=None, pump_hz=0.0, room_target=20.0,
+                      hysteresis_c=2.0, confirmed_coolant=None)
+        with self.assertNoLogs("autoterm_flow5.adaptive", "WARNING"):
+            adaptive.tick(0.0, state=None, **common)
+            adaptive.tick(10.0, state=None, **common)
+        with self.assertLogs("autoterm_flow5.adaptive", "WARNING"):
+            adaptive.tick(31.0, state=None, **common)
+
+    def test_fault_writes_safe_coolant_at_idle(self):
+        actions = self.tick(IDLE, fault=14)
+        self.assertEqual(actions.coolant_limit, self.config.safe_coolant_c)
+
+    def test_disable_restores_manual_on_idle(self):
+        self.adaptive._manual_coolant = 72.0
+        self.adaptive.on_enabled_changed(False, 60.0)
+        self.assertEqual(self.tick(IDLE).coolant_limit, 72.0)
+
+    def test_model_persists_and_resets(self):
         self.adaptive.model.ua = 0.22
         self.adaptive.model.k_bins["-2"] = 1.5
+        self.adaptive.model.active_stops.append(123.0)
         self.adaptive.save()
         loaded = AdaptiveController(self.path, self.config)
         self.assertAlmostEqual(loaded.model.ua, 0.22)
-        self.assertAlmostEqual(loaded.model.k_bins["-2"], 1.5)
-
-    def test_reset_learned_restores_defaults(self):
-        self.adaptive.model.ua = 0.4
-        self.adaptive.model.k_bins["0"] = 5
-        self.adaptive.model.c_samples = 9
-        self.adaptive.reset_learned()
-        self.assertAlmostEqual(self.adaptive.model.ua, 0.15)
-        self.assertEqual(self.adaptive.model.k_bins, {})
-        self.assertEqual(self.adaptive.model.c_samples, 0)
-
-    def test_enable_saves_manual_coolant(self):
-        self.adaptive.config.enabled = False
-        self.adaptive._enabled_was = False
-        actions = self.adaptive.on_enabled_changed(True, 77.0)
-        self.assertEqual(self.adaptive._manual_coolant, 77.0)
-        self.assertTrue(actions.save_settings)
-
-    def test_disable_restores_manual_on_idle(self):
-        self.adaptive.config.enabled = True
-        self.adaptive._enabled_was = True
-        self.adaptive._manual_coolant = 72.0
-        self.adaptive.on_enabled_changed(False, 60.0)
-        actions = self._tick(50.0, phase="idle")
-        self.assertEqual(actions.coolant_limit, 72.0)
-
-    def test_safe_coolant_on_fault(self):
-        actions = self._tick(10.0, phase="idle", fault=14, sensors_ok=False)
-        self.assertEqual(actions.coolant_limit, self.config.safe_coolant_c)
-
-    def test_status_values_include_metrics(self):
-        values = self.adaptive.status_values()
-        self.assertEqual(values["adaptive_enabled"], "ON")
-        self.assertIn(values["adaptive_status"], {"learning", "active"})
-        self.assertIn("adaptive_ua", values)
+        self.assertEqual(list(loaded.model.active_stops), [123.0])
+        loaded.reset_learned()
+        self.assertAlmostEqual(loaded.model.ua, 0.15)
+        self.assertEqual(loaded.model.k_bins, {})
 
 
-class AdaptiveControllerIntegrationTests(unittest.TestCase):
-    def test_adaptive_stop_keeps_heat_enabled(self):
-        controller = Controller(Settings())
+class ControllerHoldTests(unittest.TestCase):
+    def controller(self):
+        controller = Controller(Settings(room_target=14))
         controller.accept_device_settings(decode_heater_settings(FACTORY_SETTINGS), 0.0, "idle")
+        return controller
+
+    def test_adaptive_stop_does_not_resend_the_start(self):
+        # The log: "Sent heater stop" was followed by a thermostat start one second later.
+        controller = self.controller()
         controller.set_heat(True, 0)
-        controller.tick(0, status(), None, 15, 0)
-        controller.tick(1, status(3, 2, coolant=50), None, 15, 0)
+        controller.tick(0, status(), None, 11, 0)
+        controller.tick(1, status(3, 8, coolant=25), None, 11, 0)
         controller.adaptive_stop(2)
-        self.assertTrue(controller.heat_enabled)
-        stopped = controller.tick(2, status(3, 2, coolant=50), None, 15, 0)
+        stopped = controller.tick(2, status(3, 8, coolant=25), None, 11, 0)
         self.assertIn(stop_command(), stopped.commands)
-        controller.adaptive_resume(10)
-        idle = controller.tick(10, status(), None, 15, 0)
-        self.assertTrue(any(cmd[4] == 0x01 for cmd in idle.commands))
+        after = controller.tick(3, status(3, 8, coolant=25), None, 11, 0)
+        self.assertNotIn(requested_temperature(14), after.commands)
+        idle = controller.tick(10, status(), None, 11, 0)
+        self.assertNotIn(requested_temperature(14), idle.commands)
+        controller.adaptive_resume(11)
+        resumed = controller.tick(11, status(), None, 11, 0)
+        self.assertIn(requested_temperature(14), resumed.commands)
+
+    def test_a_held_start_waits(self):
+        controller = self.controller()
+        controller.set_heat(True, 0)
+        controller.start_blocked = True
+        held = controller.tick(0, status(), None, 11, 0)
+        self.assertNotIn(requested_temperature(14), held.commands)
+        controller.start_blocked = False
+        started = controller.tick(1, status(), None, 11, 0)
+        self.assertIn(requested_temperature(14), started.commands)
+
+    def test_confirmed_standby_is_hidden_while_a_write_is_open(self):
+        controller = self.controller()
+        self.assertEqual(controller.confirmed_standby(), 88.0)
+        controller.settings.coolant_limit = 54
+        controller.note_device_setting("coolant_limit")
+        self.assertIsNone(controller.confirmed_standby())
 
 
 if __name__ == "__main__":

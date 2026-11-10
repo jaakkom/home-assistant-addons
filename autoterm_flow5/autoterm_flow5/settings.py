@@ -53,6 +53,10 @@ class Settings:
     adaptive_soot_interval_h: float = 24.0
     adaptive_soot_target_c: float = 80.0
     adaptive_safe_coolant_c: float = 65.0
+    adaptive_min_burn_min: float = 20.0
+    adaptive_max_stops_6h: int = 2
+    adaptive_rise_offset_c: float = 1.0
+    adaptive_rise_target_c: float = 75.0
     manual_coolant_limit: float = 88.0
     simulate: bool = False
     simulate_room_c: float = 15.0
@@ -103,6 +107,10 @@ class Settings:
             adaptive_soot_interval_h=_clamp(self.adaptive_soot_interval_h, 1, 168),
             adaptive_soot_target_c=_clamp(self.adaptive_soot_target_c, 60, 95),
             adaptive_safe_coolant_c=_clamp(self.adaptive_safe_coolant_c, 40, 95),
+            adaptive_min_burn_min=_clamp(self.adaptive_min_burn_min, 0, 240),
+            adaptive_max_stops_6h=int(_clamp(self.adaptive_max_stops_6h, 0, 10)),
+            adaptive_rise_offset_c=_clamp(self.adaptive_rise_offset_c, 0.3, 10),
+            adaptive_rise_target_c=_clamp(self.adaptive_rise_target_c, 40, 95),
             manual_coolant_limit=_clamp(self.manual_coolant_limit, 20, 95),
             simulate=bool(self.simulate),
             simulate_room_c=_clamp(self.simulate_room_c, 0, 40),
@@ -228,6 +236,10 @@ def settings_from_options(options: dict) -> Settings:
         adaptive_enabled=flag("temperature", "adaptive_enabled", False),
         adaptive_coolant_min=num("temperature", "adaptive_coolant_min", 45),
         adaptive_coolant_max=num("temperature", "adaptive_coolant_max", 85),
+        adaptive_min_burn_min=num("temperature", "adaptive_min_burn_minutes", 20),
+        adaptive_max_stops_6h=int(num("temperature", "adaptive_max_stops_6h", 2)),
+        adaptive_rise_offset_c=num("temperature", "adaptive_rise_offset", 1.0),
+        adaptive_rise_target_c=num("temperature", "adaptive_rise_target", 75),
         simulate=flag("simulation", "simulate", False),
         simulate_room_c=num("simulation", "simulate_room_temperature", 15),
         simulate_outdoor_c=num("simulation", "simulate_outdoor_temperature", 0),
