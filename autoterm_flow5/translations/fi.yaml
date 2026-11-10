@@ -56,6 +56,18 @@ configuration:
       adaptive_coolant_max:
         name: Nestetavoitteen yläraja
         description: Korkein nestetavoite, jonka adaptiivinen ohjaus saa valita (°C).
+      adaptive_min_burn_minutes:
+        name: Vähimmäispolttoaika ennen pysäytystä
+        description: Adaptiivinen ohjaus ei pysäytä lämmitintä ennen kuin polttovaihe on kestänyt näin monta minuuttia.
+      adaptive_max_stops_6h:
+        name: Pysäytyksiä enintään 6 h aikana
+        description: Kun raja täyttyy, aktiiviset korjaukset pysähtyvät ja lokiin tulee varoitus.
+      adaptive_rise_offset:
+        name: NOUSU-tilan kynnys
+        description: Jos huone on tätä enemmän alle tavoitteen (°C), käytetään korkeaa nestetavoitetta ilman aktiivisia korjauksia.
+      adaptive_rise_target:
+        name: NOUSU-tilan nestetavoite
+        description: Nestetavoite NOUSU-tilassa (°C).
   timing:
     name: Käyntiajat
     description: Esilämmityksen kesto ja se, milloin huonelukema on liian vanha lähetettäväksi.

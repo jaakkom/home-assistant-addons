@@ -103,6 +103,9 @@ class Controller:
         self.mode = "thermostat"
         self.demand = False
         self.lockout = False
+        # Held by adaptive control while a coolant target is written and
+        # verified, and after its own stop until the rewrite is done.
+        self.start_blocked = False
         self._phase = "unknown"
         self._run_started_at: float | None = None
         self._stop_reason: str | None = None
@@ -142,6 +145,8 @@ class Controller:
             self._pump_sent = False
 
     def set_heat(self, enabled: bool, now: float) -> None:
+        if enabled != self.heat_enabled:
+            self.start_blocked = False
         if enabled and not self.heat_enabled:
             self.lockout = False
             self.heat_enabled = True
@@ -171,17 +176,16 @@ class Controller:
         """Stop the burner for an adaptive coolant rewrite. Heating stays on."""
         if not self.heat_enabled:
             return
+        self.start_blocked = True
         self._stop_pending = True
         self._stop_requested = True
         self._stop_reason = "adaptive"
         self._stopped_at = now
-        self._thermostat_on = False
-        self._setpoint_c = None
-        self._run_minutes_sent = None
 
     def adaptive_resume(self, now: float) -> None:
         """Start again after an adaptive stop once the heater is idle."""
         del now
+        self.start_blocked = False
         if not self.heat_enabled:
             return
         self._stop_pending = False
@@ -193,6 +197,12 @@ class Controller:
         self._preheat_sent = False
         self._pump_sent = False
         self.demand = True
+
+    def confirmed_standby(self) -> float | None:
+        """Standby temperature the heater reported back, or None while a write is open."""
+        if self._device_raw is None or self._settings_pending or self._settings_confirm:
+            return None
+        return float(self._device_raw[0])
 
     def note_device_setting(self, key: str) -> None:
         """The user changed one stored setting. Write it after the block is known."""
@@ -465,7 +475,7 @@ class Controller:
         # finite run is supposed to end, and an unlimited one is the
         # heater's own session. A fault is left alone.
         del fresh, coolant, voltage, room_age_s
-        if fault:
+        if fault or self.start_blocked:
             return []
         if phase == "cooldown":
             return []
