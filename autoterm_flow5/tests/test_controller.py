@@ -2,7 +2,9 @@ import unittest
 
 from autoterm_flow5.controller import Controller, aggregate
 from autoterm_flow5.protocol import (
+    FACTORY_SETTINGS,
     decode_extended,
+    decode_heater_settings,
     decode_status,
     cabin_temperature,
     requested_temperature,
@@ -57,6 +59,38 @@ class ControllerTests(unittest.TestCase):
         base.update(kwargs)
         return Settings(**base)
 
+    def test_a_user_change_is_written_onto_the_block_that_was_read(self):
+        controller = Controller(self.settings())
+        block = decode_heater_settings(FACTORY_SETTINGS)
+        controller.accept_device_settings(block, 1.0, "idle")
+        controller.settings.coolant_limit = 40
+        controller.note_device_setting("coolant_limit")
+        written = controller.tick(2, status(), None, None, None)
+        self.assertEqual(written.commands[0][5], 40)
+        self.assertEqual(written.commands[0][6:-2], FACTORY_SETTINGS[1:])
+        stored = bytearray(FACTORY_SETTINGS)
+        stored[0] = 40
+        self.assertFalse(
+            controller.accept_device_settings(decode_heater_settings(bytes(stored)), 3.0, "idle")
+        )
+        self.assertFalse(controller._settings_pending)
+        self.assertFalse(controller._settings_confirm)
+
+    def test_an_unread_heater_replaces_the_local_standby_temperature(self):
+        controller = Controller(self.settings(coolant_limit=70))
+        block = decode_heater_settings(FACTORY_SETTINGS)
+        self.assertTrue(controller.accept_device_settings(block, 1.0, "idle"))
+        self.assertEqual(controller.settings.coolant_limit, 88)
+        self.assertEqual(controller.settings.fan_temperature, 40)
+
+    def test_preheat_does_not_stop_at_the_standby_temperature(self):
+        controller = Controller(self.settings(coolant_limit=40, preheat_minutes=30))
+        controller.set_mode("preheat")
+        controller.set_heat(True, 0)
+        controller.tick(0, status(coolant=30), None, None, None)
+        running = controller.tick(1, status(3, 2, coolant=50), None, None, None)
+        self.assertNotIn(stop_command(), commands_of(running))
+
     def test_boot_does_not_start(self):
         controller = Controller(self.settings())
         output = controller.tick(0, status(), None, 10, 0)
@@ -80,6 +114,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_room_temperature_is_sent_when_heating_is_on(self):
         controller = Controller(self.settings())
+        controller.accept_device_settings(decode_heater_settings(FACTORY_SETTINGS), 0.0, "idle")
         controller.set_heat(True, 0)
         output = controller.tick(0, status(), None, 18.4, 0)
         self.assertEqual(commands_of(output)[:2], [start_thermostat(), cabin_temperature(18)])
@@ -155,11 +190,13 @@ class ControllerTests(unittest.TestCase):
 
     def test_preheat_and_pump(self):
         controller = Controller(self.settings(preheat_minutes=30))
+        controller.accept_device_settings(decode_heater_settings(FACTORY_SETTINGS), 0.0, "idle")
         controller.set_mode("preheat")
         controller.set_heat(True, 0)
         output = controller.tick(0, status(), None, None, None)
         self.assertEqual(output.commands, start_preheat(30))
         pump = Controller(self.settings())
+        pump.accept_device_settings(decode_heater_settings(FACTORY_SETTINGS), 0.0, "idle")
         pump.set_mode("pump")
         pump.set_heat(True, 0)
         first = pump.tick(0, status(), None, None, None)

@@ -6,15 +6,18 @@ import logging
 from typing import BinaryIO
 
 from .protocol import (
+    CRC_LEN,
     HEADER_LEN,
     PREAMBLE,
     TYPE_CABIN_TEMP,
     TYPE_PREHEAT_DURATION,
     TYPE_PUMP,
+    TYPE_SETTINGS,
     TYPE_START,
     TYPE_STOP,
     ExtendedFrame,
     Framer,
+    HeaterSettings,
     StatusFrame,
     classify,
     diagnostic_enable,
@@ -67,6 +70,8 @@ class SerialLink:
         self.tx_bytes = b""
         self.bad_crc = 0
         self.other_frames: list[str] = []
+        self.heater_settings = None
+        self.heater_settings_at: float | None = None
         self._empty_reads = 0
         self._extended_count = 0
         self._held: list[bytes] = []
@@ -367,9 +372,14 @@ class SerialLink:
                 if frame.crc_ok:
                     self.last_frame_at = now
                     self.other_frames.append(f"{frame.dev:02x}/{frame.msg_type:02x}/{frame.length}")
+                    if frame.msg_type == TYPE_SETTINGS:
+                        LOG.info("Ignored a settings frame: %s", frame.hex)
                 continue
             self.last_frame_at = now
-            if isinstance(parsed, StatusFrame):
+            if isinstance(parsed, HeaterSettings):
+                self.heater_settings = parsed
+                self.heater_settings_at = now
+            elif isinstance(parsed, StatusFrame):
                 self.status = parsed
                 self.last_status_at = now
                 found_status = True
@@ -439,6 +449,11 @@ def _parameter_note(note: str) -> bool:
 def _log_report(command: bytes) -> None:
     if len(command) >= 6 and command[4] == TYPE_CABIN_TEMP:
         LOG.info("Sent room temperature %s °C", command[5])
+    elif len(command) >= HEADER_LEN and command[4] == TYPE_SETTINGS:
+        if len(command) == HEADER_LEN + CRC_LEN:
+            LOG.info("Asked the heater for its stored settings")
+        else:
+            LOG.info("Sent stored settings to the heater")
 
 
 def _log_control(command: bytes) -> None:

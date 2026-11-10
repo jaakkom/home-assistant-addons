@@ -23,6 +23,9 @@ TYPE_STOP = 0x03
 TYPE_STATUS = 0x0F
 TYPE_CABIN_TEMP = 0x11
 TYPE_PUMP = 0x21
+# BINAR-5S profile command 32. The panel and Autoterm Test use it to read
+# and write the control unit's stored operating settings.
+TYPE_SETTINGS = 0x20
 TYPE_EXTENDED = 0x01
 # Empty device-0x02 query. Autoterm Test sends it, and this heater does not answer it.
 TYPE_DIAGNOSTIC = 0x00
@@ -244,6 +247,113 @@ def start_pump() -> bytes:
 def cabin_temperature(celsius: int) -> bytes:
     value = max(0, min(125, int(celsius)))
     return build_frame(DEV_PANEL, TYPE_CABIN_TEMP, bytes([value]))
+
+
+# Byte order is the BINAR-5S profile's a1..a10 block for command 32.
+# Temperatures are the Celsius byte. The mode numbers are the ones the
+# BINAR-5S SMS settings command writes: auxiliary 0/2/3, and the on/off
+# flags 0 or 1.
+SETTINGS_LENGTHS = (9, 10)
+AUXILIARY_MODES = {"off": 0, "auto": 2, "manual": 3}
+AUXILIARY_NAMES = {0: "off", 2: "auto", 3: "manual"}
+RELAY_MODES = {"auto": 0, "off": 1}
+RELAY_NAMES = {0: "auto", 1: "off"}
+PUMP_SIGNALS = {"plain": 0, "pwm": 1}
+PUMP_SIGNAL_NAMES = {0: "plain", 1: "pwm"}
+# Factory block from the modem's reset reply: standby 88 °C, auxiliary off,
+# auxiliary standby 95 °C, cabin relay automatic at 40 °C, plain pump signal,
+# pump only with the heater, pump on in standby, alarm channel on.
+FACTORY_SETTINGS = bytes((88, 0, 95, 0, 40, 0, 0, 0, 0, 0))
+
+
+@dataclass
+class HeaterSettings:
+    """Operating settings stored in the control unit, not in the add-on."""
+
+    raw: bytes
+    standby_c: int
+    auxiliary_mode: int
+    auxiliary_c: int
+    relay_mode: int
+    relay_c: int
+    pump_signal: int
+    pump_with_engine: int
+    pump_standby: int
+    alarm_channel: int
+
+
+def settings_request() -> bytes:
+    """Ask the control unit for its stored settings block."""
+    return build_frame(DEV_PANEL, TYPE_SETTINGS)
+
+
+def settings_write(payload: bytes) -> bytes:
+    """Write the stored settings block back to the control unit."""
+    return build_frame(DEV_PANEL, TYPE_SETTINGS, payload)
+
+
+def decode_heater_settings(payload: bytes) -> HeaterSettings | None:
+    """Parse a command-32 reply. Anything else is left untouched."""
+    if len(payload) not in SETTINGS_LENGTHS:
+        return None
+    standby, auxiliary_c, relay_c = payload[0], payload[2], payload[4]
+    if not (20 <= standby <= 95 and 80 <= auxiliary_c <= 95 and 30 <= relay_c <= 60):
+        return None
+    return HeaterSettings(
+        raw=bytes(payload),
+        standby_c=standby,
+        auxiliary_mode=payload[1],
+        auxiliary_c=auxiliary_c,
+        relay_mode=payload[3],
+        relay_c=relay_c,
+        pump_signal=payload[5],
+        pump_with_engine=payload[6],
+        pump_standby=payload[7],
+        alarm_channel=payload[8],
+    )
+
+
+def _named(table: dict[int, str], value: int) -> str:
+    return table.get(value, str(value))
+
+
+def heater_settings_view(parsed: HeaterSettings) -> dict[str, object]:
+    """Values the add-on shows and edits for one settings block."""
+    return {
+        "coolant_limit": float(parsed.standby_c),
+        "auxiliary_mode": _named(AUXILIARY_NAMES, parsed.auxiliary_mode),
+        "auxiliary_limit": float(parsed.auxiliary_c),
+        "relay_mode": _named(RELAY_NAMES, parsed.relay_mode),
+        "fan_temperature": float(parsed.relay_c),
+        "pump_signal": _named(PUMP_SIGNAL_NAMES, parsed.pump_signal),
+        "pump_with_engine": parsed.pump_with_engine == 1,
+        "pump_standby": parsed.pump_standby == 0,
+        "alarm_channel": parsed.alarm_channel == 0,
+    }
+
+
+def patch_heater_settings(raw: bytes, changes: dict[str, object]) -> bytes:
+    """Change only the named bytes. Every other stored byte stays as read."""
+    data = bytearray(raw)
+    if "coolant_limit" in changes:
+        data[0] = max(20, min(95, int(changes["coolant_limit"])))
+    if "auxiliary_mode" in changes and changes["auxiliary_mode"] in AUXILIARY_MODES:
+        data[1] = AUXILIARY_MODES[str(changes["auxiliary_mode"])]
+    if "auxiliary_limit" in changes:
+        data[2] = max(80, min(95, int(changes["auxiliary_limit"])))
+    if "relay_mode" in changes and changes["relay_mode"] in RELAY_MODES:
+        data[3] = RELAY_MODES[str(changes["relay_mode"])]
+    if "fan_temperature" in changes:
+        data[4] = max(30, min(60, int(changes["fan_temperature"])))
+    if "pump_signal" in changes and changes["pump_signal"] in PUMP_SIGNALS:
+        data[5] = PUMP_SIGNALS[str(changes["pump_signal"])]
+    if "pump_with_engine" in changes:
+        data[6] = 1 if changes["pump_with_engine"] else 0
+    if "pump_standby" in changes:
+        data[7] = 0 if changes["pump_standby"] else 1
+    if "alarm_channel" in changes:
+        data[8] = 0 if changes["alarm_channel"] else 1
+    return bytes(data)
 
 
 def state_name(state: int, substate: int) -> str:
@@ -601,11 +711,13 @@ def _restore_one_byte(received: bytes) -> bytes | None:
     return found[0]
 
 
-def classify(frame: Frame) -> StatusFrame | ExtendedFrame | None:
+def classify(frame: Frame) -> StatusFrame | ExtendedFrame | HeaterSettings | None:
     if not frame.crc_ok:
         return None
     if frame.dev == DEV_HEATER and frame.msg_type == TYPE_STATUS:
         return decode_status(frame.payload)
+    if frame.dev == DEV_HEATER and frame.msg_type == TYPE_SETTINGS:
+        return decode_heater_settings(frame.payload)
     if (
         frame.dev == DEV_EXTENDED
         and frame.msg_type in (TYPE_EXTENDED, TYPE_DIAGNOSTIC)

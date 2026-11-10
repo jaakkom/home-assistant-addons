@@ -10,8 +10,10 @@ from .protocol import (
     DEV_EXTENDED,
     DEV_HEATER,
     DEV_PANEL,
+    FACTORY_SETTINGS,
     TYPE_DIAGNOSTIC_MODE,
     TYPE_EXTENDED,
+    TYPE_SETTINGS,
     TYPE_STATUS,
     Framer,
     build_frame,
@@ -30,6 +32,7 @@ class SimulatedHeater:
         self.extended_enabled = False
         self.events: list[str] = []
         self.silent = False
+        self.settings_block = bytearray(FACTORY_SETTINGS)
         self._pending = bytearray()
 
     def write(self, data: bytes) -> None:
@@ -62,6 +65,13 @@ class SimulatedHeater:
                 self.events.append("pump")
             elif frame.msg_type == 0x11:
                 self.events.append("cabin")
+            elif frame.msg_type == TYPE_SETTINGS:
+                if frame.payload:
+                    self.settings_block = bytearray(frame.payload)
+                    self.events.append("settings-write")
+                else:
+                    self.events.append("settings-read")
+                self._pending.extend(build_frame(DEV_HEATER, TYPE_SETTINGS, bytes(self.settings_block)))
         self._advance()
         self._pending.extend(self._status_frame())
         if self.extended_enabled:

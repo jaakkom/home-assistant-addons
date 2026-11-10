@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .controller import Controller, aggregate
+from .controller import Controller, aggregate, phase_of
 from .faults import ChangeNotifier, LinkNotifier, Notice, fault_name
 from .fuel import FuelMeter, liters_per_hour
 from .ha import deliver_notice, read_temperature, supervisor_token
@@ -211,6 +211,8 @@ def run() -> None:
             elif announced_telemetry and link.telemetry_stale(now):
                 LOG.warning("Telemetry frame stopped")
                 announced_telemetry = False
+            if result.settings_changed:
+                settings.save(SETTINGS_PATH)
             panel.publish(result.values)
             for key, value in mqtt_state_updates(result.values, published).items():
                 client.publish(state_topic(key), value, retain=True)
@@ -233,6 +235,7 @@ class CycleResult:
     values: dict[str, str]
     notices: list[Notice]
     frequency_hz: float
+    settings_changed: bool = False
 
 
 def _log_link(progress: LinkProgress, now: float, online: bool, mode: str, serial_path: str) -> None:
@@ -274,6 +277,16 @@ def step(
     room_age_s: float | None,
 ) -> CycleResult:
     """One control cycle against the previous status, then a fresh poll."""
+    settings_changed = False
+    if link.heater_settings is not None and link.heater_settings_at is not None:
+        settings_changed = controller.accept_device_settings(
+            link.heater_settings,
+            link.heater_settings_at,
+            phase_of(link.status),
+        )
+        if settings_changed:
+            for key, value in vars(controller.settings).items():
+                setattr(settings, key, value)
     port = link.port
     if settings.simulate and isinstance(port, SimulatedHeater):
         port.fault = int(settings.simulate_fault)
@@ -315,7 +328,12 @@ def step(
         status_at=link.last_status_at,
         extended_at=link.last_extended_at,
     )
-    return CycleResult(values=values, notices=notices, frequency_hz=frequency)
+    return CycleResult(
+        values=values,
+        notices=notices,
+        frequency_hz=frequency,
+        settings_changed=settings_changed,
+    )
 
 
 def _room(

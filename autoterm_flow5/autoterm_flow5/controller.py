@@ -14,9 +14,14 @@ from dataclasses import dataclass, field
 from .faults import LOCKOUT_CODES, SELF_STOP_CODES
 from .protocol import (
     ExtendedFrame,
+    HeaterSettings,
     StatusFrame,
     cabin_temperature,
+    heater_settings_view,
+    patch_heater_settings,
     requested_temperature,
+    settings_request,
+    settings_write,
     start_preheat,
     start_pump,
     stop_command,
@@ -26,6 +31,17 @@ from .settings import Settings
 LOG = logging.getLogger("autoterm_flow5.controller")
 MODES = ("thermostat", "preheat", "pump")
 ACTIVE = frozenset({"starting", "running"})
+DEVICE_SETTING_KEYS = frozenset({
+    "coolant_limit",
+    "auxiliary_mode",
+    "auxiliary_limit",
+    "relay_mode",
+    "fan_temperature",
+    "pump_signal",
+    "pump_with_engine",
+    "pump_standby",
+    "alarm_channel",
+})
 
 
 def aggregate(values: list[float | None], mode: str) -> float | None:
@@ -106,6 +122,15 @@ class Controller:
         # One thermostat start per time the user switches heating on.
         self._thermostat_on = False
         self._setpoint_c: int | None = None
+        self._device_raw: bytes | None = None
+        self._settings_dirty: set[str] = set()
+        self._settings_pending = False
+        self._settings_confirm = False
+        self._settings_wait_idle = False
+        self._settings_attempts = 0
+        self._settings_asked_at: float | None = None
+        self._settings_write_at: float | None = None
+        self._settings_seen_at: float | None = None
 
     def set_mode(self, mode: str) -> None:
         if mode in MODES and mode != self.mode:
@@ -137,6 +162,122 @@ class Controller:
 
     def request_stop(self, now: float) -> None:
         self.set_heat(False, now)
+
+    def note_device_setting(self, key: str) -> None:
+        """The user changed one stored setting. Write it after the block is known."""
+        if key not in DEVICE_SETTING_KEYS:
+            return
+        self._settings_dirty.add(key)
+        self._settings_pending = True
+        self._settings_wait_idle = False
+        self._settings_attempts = 0
+
+    def accept_device_settings(self, parsed: HeaterSettings, seen_at: float, phase: str) -> bool:
+        """Take a settings block the heater just sent.
+
+        A block that arrives before the user edits anything replaces the
+        add-on's copy. An edit made first is written on top of that block.
+        """
+        if seen_at == self._settings_seen_at:
+            return False
+        self._settings_seen_at = seen_at
+        if self._settings_confirm:
+            return self._confirm_settings(parsed, phase)
+        if self._settings_pending and self._device_raw is None:
+            self._device_raw = patch_heater_settings(parsed.raw, self._changes())
+            return False
+        if self._settings_pending:
+            return False
+        if self._device_raw == parsed.raw:
+            return False
+        self._device_raw = parsed.raw
+        return self._copy_device_settings(parsed)
+
+    def _confirm_settings(self, parsed: HeaterSettings, phase: str) -> bool:
+        self._settings_confirm = False
+        if parsed.raw == self._device_raw:
+            self._settings_attempts = 0
+            self._settings_wait_idle = False
+            LOG.info("Heater stored the settings")
+            return False
+        self._settings_attempts += 1
+        if self._settings_attempts < 2 or phase in ACTIVE:
+            self._settings_pending = True
+            self._settings_wait_idle = phase in ACTIVE
+            LOG.info("Heater did not store the settings yet")
+            return False
+        LOG.warning("Heater kept its own settings")
+        self._settings_pending = False
+        self._settings_wait_idle = False
+        self._settings_dirty.clear()
+        self._settings_attempts = 0
+        self._device_raw = parsed.raw
+        return self._copy_device_settings(parsed)
+
+    def _changes(self) -> dict[str, object]:
+        values: dict[str, object] = {}
+        for key in self._settings_dirty:
+            if key == "coolant_limit":
+                values[key] = self.settings.coolant_limit
+            elif key == "auxiliary_mode":
+                values[key] = self.settings.auxiliary_mode
+            elif key == "auxiliary_limit":
+                values[key] = self.settings.auxiliary_limit
+            elif key == "relay_mode":
+                values[key] = self.settings.relay_mode
+            elif key == "fan_temperature":
+                values[key] = self.settings.fan_temperature
+            elif key == "pump_signal":
+                values[key] = self.settings.pump_signal
+            elif key == "pump_with_engine":
+                values[key] = self.settings.pump_with_engine
+            elif key == "pump_standby":
+                values[key] = self.settings.pump_standby
+            elif key == "alarm_channel":
+                values[key] = self.settings.alarm_channel
+        return values
+
+    def _copy_device_settings(self, parsed: HeaterSettings) -> bool:
+        view = heater_settings_view(parsed)
+        changed = False
+        for key, value in view.items():
+            if getattr(self.settings, key) != value:
+                setattr(self.settings, key, value)
+                changed = True
+        if changed:
+            LOG.info(
+                "Read heater settings: standby %s °C, auxiliary %s °C, fan %s °C",
+                parsed.standby_c,
+                parsed.auxiliary_c,
+                parsed.relay_c,
+            )
+        return changed
+
+    def _settings_commands(self, now: float, phase: str) -> list[bytes]:
+        if self._device_raw is None:
+            if self._settings_asked_at is None or now - self._settings_asked_at >= 10:
+                self._settings_asked_at = now
+                return [settings_request()]
+            return []
+        if self._settings_pending:
+            if self._settings_wait_idle and phase in ACTIVE:
+                return []
+            self._device_raw = patch_heater_settings(self._device_raw, self._changes())
+            self._settings_dirty.clear()
+            self._settings_pending = False
+            self._settings_confirm = True
+            self._settings_write_at = now
+            LOG.info("Sending stored settings to the heater")
+            return [settings_write(self._device_raw)]
+        if (
+            self._settings_confirm
+            and self._settings_write_at is not None
+            and now - self._settings_write_at >= 2
+            and (self._settings_asked_at is None or now - self._settings_asked_at >= 10)
+        ):
+            self._settings_asked_at = now
+            return [settings_request()]
+        return []
 
     def tick(
         self,
@@ -208,6 +349,7 @@ class Controller:
             self._run_started_at = None
             self._start_at = None
 
+        commands[0:0] = self._settings_commands(now, phase)
         if fresh and room_c is not None:
             reported = int(round(room_c))
             due = (
@@ -376,14 +518,16 @@ def _safety_stop(
     coolant: float | None,
     voltage: float | None,
 ) -> bool:
-    """Coolant limit and low voltage stop even during the minimum run."""
+    """Low voltage stops preheat and pump mode even during the minimum run.
+
+    The coolant limit is the heater's own standby temperature. It is stored
+    in the control unit, so this loop does not send a separate stop for it.
+    """
+    del coolant
     if phase not in ACTIVE:
         controller._voltage_low_since = None
         return False
     settings = controller.settings
-    if coolant is not None and coolant >= settings.coolant_limit:
-        controller._mark_stop(now, "coolant")
-        return True
     if voltage is not None and voltage < settings.shutdown_voltage:
         if controller._voltage_low_since is None:
             controller._voltage_low_since = now

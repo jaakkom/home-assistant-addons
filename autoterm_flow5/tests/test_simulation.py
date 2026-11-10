@@ -279,6 +279,17 @@ class SimulationLoopTests(unittest.TestCase):
         self.assertEqual(idle.values["fault_code"], "0")
         self.assertEqual(idle.values["burner"], "OFF")
 
+    def test_a_changed_standby_temperature_is_written_to_the_heater(self):
+        for _ in range(4):
+            self.cycle()
+        self.assertEqual(list(self.heater.settings_block), list(bytes((88, 0, 95, 0, 40, 0, 0, 0, 0, 0))))
+        apply_command(self.controller, self.settings, f"{PREFIX}/set/coolant_limit", "40", self.now)
+        for _ in range(3):
+            self.cycle()
+        self.assertEqual(self.heater.settings_block[0], 40)
+        self.assertEqual(list(self.heater.settings_block[1:]), [0, 95, 0, 40, 0, 0, 0, 0, 0])
+        self.assertEqual(self.settings.coolant_limit, 40)
+
     def test_discovery_advertises_the_simulation_entities(self):
         payloads = "\n".join(payload for _topic, payload in discovery_messages())
         self.assertIn("Simulated room temperature", payloads)
