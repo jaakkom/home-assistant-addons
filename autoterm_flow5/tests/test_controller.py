@@ -405,9 +405,9 @@ class RoomThermostatTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "settings.json"
-            path.write_text(json.dumps({"room_drop": 2.0, "room_rise": 1.0}))
+            path.write_text(json.dumps({"room_drop": 2.0, "room_rise": 1.0, "min_off_s": 600.0}))
             migrated = Settings.load(path)
-            self.assertEqual((migrated.room_drop, migrated.room_rise), (1.0, 0.5))
+            self.assertEqual((migrated.room_drop, migrated.room_rise, migrated.min_off_s), (1.0, 0.5, 300.0))
             path.write_text(json.dumps({"room_drop": 3.0, "room_rise": 1.0}))
             chosen = Settings.load(path)
             self.assertEqual((chosen.room_drop, chosen.room_rise), (3.0, 1.0))
