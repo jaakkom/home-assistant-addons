@@ -41,7 +41,7 @@ options:
     aggregation: min
     room_target: 20
     adaptive_enabled: false
-    adaptive_coolant_min: 45
+    adaptive_coolant_min: 40
     adaptive_coolant_max: 85
     adaptive_min_burn_minutes: 20
     adaptive_max_stops_6h: 2

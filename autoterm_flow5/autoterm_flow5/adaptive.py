@@ -120,7 +120,7 @@ def outdoor_bin(outdoor_c: float) -> int:
 @dataclass
 class AdaptiveConfig:
     enabled: bool = False
-    coolant_min: float = 45.0
+    coolant_min: float = 40.0
     coolant_max: float = 85.0
     margin_c: float = 3.0
     base_step_c: float = 2.0
@@ -1421,7 +1421,7 @@ def config_from_settings(settings: Any) -> AdaptiveConfig:
     """Build AdaptiveConfig from the add-on Settings object."""
     return AdaptiveConfig(
         enabled=bool(getattr(settings, "adaptive_enabled", False)),
-        coolant_min=float(getattr(settings, "adaptive_coolant_min", 45.0)),
+        coolant_min=float(getattr(settings, "adaptive_coolant_min", 40.0)),
         coolant_max=float(getattr(settings, "adaptive_coolant_max", 85.0)),
         margin_c=float(getattr(settings, "adaptive_margin_c", 3.0)),
         base_step_c=float(getattr(settings, "adaptive_base_step_c", 2.0)),
