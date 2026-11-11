@@ -14,10 +14,11 @@ def _clamp(value: float, low: float, high: float) -> float:
 @dataclass
 class Settings:
     room_target: float = 20.0
-    room_drop: float = 2.0
-    room_rise: float = 1.0
+    room_drop: float = 1.0
+    room_rise: float = 0.5
+    room_control: bool = True
     min_on_s: float = 600.0
-    min_off_s: float = 600.0
+    min_off_s: float = 300.0
     sensor_stale_s: float = 900.0
     coolant_limit: float = 88.0
     coolant_drop: float = 18.0
@@ -71,6 +72,7 @@ class Settings:
             room_target=_clamp(self.room_target, 0, 40),
             room_drop=_clamp(self.room_drop, 0, 10),
             room_rise=_clamp(self.room_rise, 0, 10),
+            room_control=bool(self.room_control),
             min_on_s=_clamp(self.min_on_s, 0, 7200),
             min_off_s=_clamp(self.min_off_s, 0, 7200),
             sensor_stale_s=_clamp(self.sensor_stale_s, 60, 7200),
@@ -142,6 +144,14 @@ class Settings:
         for key in data:
             if key in raw:
                 data[key] = raw[key]
+        # Files saved before the add-on thermostat carry the old defaults,
+        # which were never shown to the user as a choice.
+        if "room_control" not in raw:
+            if raw.get("room_drop") == 2.0 and raw.get("room_rise") == 1.0:
+                data["room_drop"] = base.room_drop
+                data["room_rise"] = base.room_rise
+            if raw.get("min_off_s") == 600.0:
+                data["min_off_s"] = base.min_off_s
         return cls(**data).sanitized()
 
 
@@ -206,10 +216,11 @@ def settings_from_options(options: dict) -> Settings:
 
     return Settings(
         room_target=num("temperature", "room_target", 20),
-        room_drop=num("temperature", "room_drop", 2),
-        room_rise=num("temperature", "room_rise", 1),
+        room_drop=num("temperature", "room_drop", 1),
+        room_rise=num("temperature", "room_rise", 0.5),
+        room_control=flag("temperature", "room_control", True),
         min_on_s=num("timing", "min_on_minutes", 10) * 60,
-        min_off_s=num("timing", "min_off_minutes", 10) * 60,
+        min_off_s=num("timing", "min_off_minutes", 5) * 60,
         sensor_stale_s=num("timing", "sensor_stale_minutes", 15) * 60,
         coolant_limit=num("protection", "coolant_limit", 88),
         coolant_drop=num("protection", "coolant_drop", 18),

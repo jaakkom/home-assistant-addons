@@ -213,6 +213,7 @@ class SimulationLoopTests(unittest.TestCase):
         self.assertIn("cabin", self.heater.events)
 
     def test_room_temperature_does_not_stop_the_heater(self):
+        self.settings.room_control = False
         self.settings.coolant_limit = 95
         self.controller.settings = self.settings
         self.cycle()

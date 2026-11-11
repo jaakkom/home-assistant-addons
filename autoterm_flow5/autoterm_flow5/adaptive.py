@@ -1243,7 +1243,7 @@ def config_from_settings(settings: Any) -> AdaptiveConfig:
         soot_interval_s=float(getattr(settings, "adaptive_soot_interval_h", 24.0)) * 3600.0,
         soot_target_c=float(getattr(settings, "adaptive_soot_target_c", 80.0)),
         safe_coolant_c=float(getattr(settings, "adaptive_safe_coolant_c", 65.0)),
-        room_hysteresis_c=float(getattr(settings, "room_drop", 2.0)),
+        room_hysteresis_c=float(getattr(settings, "room_drop", 1.0)),
         rise_offset_c=float(getattr(settings, "adaptive_rise_offset_c", 1.0)),
         rise_target_c=float(getattr(settings, "adaptive_rise_target_c", 75.0)),
     )

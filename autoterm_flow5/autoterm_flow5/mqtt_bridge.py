@@ -193,6 +193,7 @@ def discovery_messages() -> list[tuple[str, str]]:
         _number("adaptive_coolant_min", "Adaptive coolant minimum", 20, 95, 1, "°C", category="config"),
         _number("adaptive_coolant_max", "Adaptive coolant maximum", 20, 95, 1, "°C", category="config"),
         _number("room_drop", "Room hysteresis", 0, 10, 0.5, "°C", category="config"),
+        _number("room_rise", "Stop above target", 0, 10, 0.5, "°C", category="config"),
     ]
     for index in (5, 8, 10, 13, 14, 15, 17):
         entities.append(_sensor(f"status_byte_{index}", f"Status byte {index}", diagnostic=True))
@@ -258,6 +259,18 @@ def discovery_messages() -> list[tuple[str, str]]:
         "availability_topic": f"{PREFIX}/availability",
         "device": DEVICE,
         "icon": "mdi:chart-timeline-variant-shimmer",
+    })))
+    messages.append((f"homeassistant/switch/{PREFIX}/room_control/config", json.dumps({
+        "name": "Add-on thermostat",
+        "unique_id": f"{PREFIX}_room_control",
+        "command_topic": set_topic("room_control"),
+        "state_topic": state_topic("room_control"),
+        "payload_on": "ON",
+        "payload_off": "OFF",
+        "availability_topic": f"{PREFIX}/availability",
+        "device": DEVICE,
+        "entity_category": "config",
+        "icon": "mdi:thermostat-auto",
     })))
     messages.append((f"homeassistant/select/{PREFIX}/mode/config", json.dumps({
         "name": "Mode",
@@ -463,6 +476,8 @@ def collect_state(
         "alarm_channel": "ON" if settings.alarm_channel else "OFF",
         "room_target": settings.room_target,
         "room_drop": settings.room_drop,
+        "room_rise": settings.room_rise,
+        "room_control": "ON" if settings.room_control else "OFF",
         "sensor_stale": settings.sensor_stale_s / 60,
         "shutdown_voltage": settings.shutdown_voltage,
         "shutdown_voltage_seconds": settings.shutdown_voltage_s,
@@ -552,6 +567,8 @@ def apply_command(
         settings.debug = text == "ON"
     elif key == "adaptive_enabled":
         settings.adaptive_enabled = text == "ON"
+    elif key == "room_control":
+        settings.room_control = text == "ON"
     elif key == "auxiliary_mode" and text in {"off", "auto", "manual"}:
         settings.auxiliary_mode = text
     elif key == "relay_mode" and text in {"auto", "off"}:
@@ -584,6 +601,8 @@ def _apply_number(settings: Settings, key: str, text: str) -> None:
         settings.room_target = float(text)
     elif key == "room_drop":
         settings.room_drop = float(text)
+    elif key == "room_rise":
+        settings.room_rise = float(text)
     elif key == "sensor_stale":
         settings.sensor_stale_s = float(text) * 60
     elif key == "coolant_limit":

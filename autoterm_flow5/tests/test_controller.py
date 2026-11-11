@@ -131,7 +131,7 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(output.demand)
 
     def test_switching_on_starts_even_when_the_room_is_already_warm(self):
-        controller = Controller(self.settings())
+        controller = Controller(self.settings(room_control=False))
         controller.set_heat(True, 0)
         output = controller.tick(0, status(), None, 22, 0)
         self.assertIn(start_thermostat(), commands_of(output))
@@ -148,7 +148,7 @@ class ControllerTests(unittest.TestCase):
         self.assertAlmostEqual(aggregate([10, 20], "avg"), 15)
 
     def test_a_warm_room_does_not_stop_thermostat_mode(self):
-        controller = Controller(self.settings())
+        controller = Controller(self.settings(room_control=False))
         controller.set_heat(True, 0)
         started = controller.tick(0, status(), None, 15, 0)
         self.assertIn(start_thermostat(), commands_of(started))
@@ -230,7 +230,7 @@ class ControllerTests(unittest.TestCase):
     def test_eight_degrees_is_not_an_eight_minute_run(self):
         controller = Controller(self.settings(room_target=8))
         controller.set_heat(True, 0)
-        output = controller.tick(0, status(), None, 16, 0)
+        output = controller.tick(0, status(), None, 6, 0)
         self.assertIn(start_thermostat(8), commands_of(output))
         self.assertEqual(start_thermostat(8)[5:7].hex(), "ffff")
 
@@ -316,6 +316,112 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(output.fan_on)
         cool = controller.tick(1, status(coolant=39), None, None, None)
         self.assertFalse(cool.fan_on)
+
+
+class RoomThermostatTests(unittest.TestCase):
+    """The add-on stops and starts from the room sensor. Field log: target 16 °C, room 19 °C, heater on High."""
+
+    def controller(self, **kwargs):
+        base = dict(room_target=16, room_drop=2, room_rise=1, min_on_s=600, min_off_s=600, sensor_stale_s=900)
+        base.update(kwargs)
+        return Controller(Settings(**base))
+
+    def test_a_warm_room_stops_the_heater_after_the_minimum_run(self):
+        controller = self.controller()
+        controller.set_heat(True, 0)
+        controller.tick(0, status(), None, 14, 0)
+        controller.tick(5, status(3, 2, coolant=55), None, 15, 0)
+        early = controller.tick(300, status(3, 2, coolant=55), None, 19, 0)
+        self.assertNotIn(stop_command(), commands_of(early))
+        stopped = controller.tick(610, status(3, 2, coolant=55), None, 19, 0)
+        self.assertIn(stop_command(), commands_of(stopped))
+        self.assertFalse(stopped.demand)
+
+    def test_the_heater_waits_until_the_room_falls_by_the_hysteresis(self):
+        controller = self.controller()
+        controller.set_heat(True, 0)
+        controller.tick(0, status(), None, 14, 0)
+        controller.tick(5, status(3, 2, coolant=55), None, 15, 0)
+        controller.tick(610, status(3, 2, coolant=55), None, 17, 0)
+        controller.tick(620, status(4, 0, coolant=55), None, 17, 0)
+        for when, room in ((700, 16.5), (900, 15.0), (1200, 14.5)):
+            waiting = controller.tick(when, status(coolant=50), None, room, 0)
+            self.assertNotIn(requested_temperature(16), commands_of(waiting))
+        started = controller.tick(1300, status(coolant=45), None, 14, 0)
+        self.assertIn(requested_temperature(16), commands_of(started))
+        self.assertTrue(started.demand)
+
+    def test_no_restart_before_the_minimum_off_time(self):
+        controller = self.controller()
+        controller.set_heat(True, 0)
+        controller.tick(0, status(), None, 14, 0)
+        controller.tick(5, status(3, 2, coolant=55), None, 15, 0)
+        controller.tick(610, status(3, 2, coolant=55), None, 17, 0)
+        cold = controller.tick(900, status(coolant=45), None, 13, 0)
+        self.assertNotIn(requested_temperature(16), commands_of(cold))
+        later = controller.tick(1211, status(coolant=45), None, 13, 0)
+        self.assertIn(requested_temperature(16), commands_of(later))
+
+    def test_switching_on_in_a_warm_room_does_not_light_the_heater(self):
+        controller = self.controller()
+        controller.set_heat(True, 0)
+        warm = controller.tick(0, status(), None, 19, 0)
+        self.assertNotIn(requested_temperature(16), commands_of(warm))
+        self.assertFalse(warm.demand)
+
+    def test_a_stale_room_reading_changes_nothing(self):
+        controller = self.controller()
+        controller.set_heat(True, 0)
+        controller.tick(0, status(), None, 14, 0)
+        controller.tick(5, status(3, 2, coolant=55), None, 15, 0)
+        stale = controller.tick(700, status(3, 2, coolant=55), None, 19, 1000)
+        self.assertNotIn(stop_command(), commands_of(stale))
+
+    def test_a_heater_that_ends_its_own_session_is_started_again_when_cold(self):
+        controller = self.controller()
+        controller.set_heat(True, 0)
+        controller.tick(0, status(), None, 14, 0)
+        controller.tick(5, status(3, 2, coolant=55), None, 15, 0)
+        controller.tick(100, status(), None, 16.5, 0)
+        early = controller.tick(400, status(), None, 13.5, 0)
+        self.assertNotIn(requested_temperature(16), commands_of(early))
+        again = controller.tick(701, status(), None, 13.5, 0)
+        self.assertIn(requested_temperature(16), commands_of(again))
+
+    def test_an_adaptive_resume_does_not_light_a_warm_room(self):
+        controller = self.controller()
+        controller.set_heat(True, 0)
+        controller.tick(0, status(), None, 14, 0)
+        controller.tick(5, status(3, 2, coolant=55), None, 15, 0)
+        controller.tick(610, status(3, 2, coolant=55), None, 17.5, 0)
+        controller.adaptive_resume(700)
+        idle = controller.tick(700, status(coolant=50), None, 17, 0)
+        self.assertNotIn(requested_temperature(16), commands_of(idle))
+
+    def test_old_saved_defaults_move_to_the_smaller_ones(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.json"
+            path.write_text(json.dumps({"room_drop": 2.0, "room_rise": 1.0, "min_off_s": 600.0}))
+            migrated = Settings.load(path)
+            self.assertEqual((migrated.room_drop, migrated.room_rise, migrated.min_off_s), (1.0, 0.5, 300.0))
+            path.write_text(json.dumps({"room_drop": 3.0, "room_rise": 1.0}))
+            chosen = Settings.load(path)
+            self.assertEqual((chosen.room_drop, chosen.room_rise), (3.0, 1.0))
+            path.write_text(json.dumps({"room_drop": 2.0, "room_rise": 1.0, "room_control": True}))
+            kept = Settings.load(path)
+            self.assertEqual((kept.room_drop, kept.room_rise), (2.0, 1.0))
+
+    def test_switched_off_room_control_leaves_it_to_the_heater(self):
+        controller = self.controller(room_control=False)
+        controller.set_heat(True, 0)
+        controller.tick(0, status(), None, 14, 0)
+        controller.tick(5, status(3, 2, coolant=55), None, 15, 0)
+        warm = controller.tick(900, status(3, 2, coolant=55), None, 20, 0)
+        self.assertNotIn(stop_command(), commands_of(warm))
 
 
 if __name__ == "__main__":
