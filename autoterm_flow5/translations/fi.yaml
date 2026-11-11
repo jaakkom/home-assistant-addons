@@ -52,7 +52,7 @@ configuration:
         description: Säätää nestetavoitetta automaattisesti pidempiä käyntijaksoja ja vähemmän sytytyksiä varten. Oletus pois.
       adaptive_coolant_min:
         name: Nestetavoitteen alaraja
-        description: Matalin nestetavoite, jonka adaptiivinen ohjaus saa valita (°C).
+        description: Matalin nestetavoite, jonka adaptiivinen ohjaus saa valita (°C). Oletus 40.
       adaptive_coolant_max:
         name: Nestetavoitteen yläraja
         description: Korkein nestetavoite, jonka adaptiivinen ohjaus saa valita (°C).

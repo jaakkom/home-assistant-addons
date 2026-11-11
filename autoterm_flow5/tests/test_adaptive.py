@@ -245,14 +245,81 @@ class AdaptiveControllerTests(unittest.TestCase):
         self.assertEqual(changed.coolant_limit, self.config.rise_target_c)
         self.assertTrue(changed.hold_start)
 
-    def test_a_new_room_target_during_the_burn_is_written_without_a_stop(self):
+    def test_a_new_room_target_during_the_burn_waits_for_the_rest(self):
+        # Field log: the heater kept its stored settings while burning.
         self.ignite()
         self.run_for(LOW, 60, pump_hz=1.8, coolant_c=50)
+        last = self.adaptive.model.last_target
         changed = self.tick(LOW, pump_hz=1.8, coolant_c=50, room_target=22.0)
-        self.assertEqual(changed.coolant_limit, self.config.rise_target_c)
+        self.assertIsNone(changed.coolant_limit)
         self.assertFalse(changed.stop)
-        later = self.tick(LOW, pump_hz=1.8, coolant_c=50, room_target=22.0)
-        self.assertIsNone(later.coolant_limit)
+        self.assertEqual(self.adaptive.model.last_target, last)
+
+    def test_a_large_raise_during_the_burn_stops_writes_and_restarts(self):
+        self.ignite()
+        self.run_for(LOW, 25 * 60, pump_hz=1.8, coolant_c=55)
+        early = self.run_for(LOW, 50, pump_hz=1.8, coolant_c=55, room_target=23.0)
+        self.assertFalse(any(a.stop for a in early))
+        later = self.run_for(LOW, 20, pump_hz=1.8, coolant_c=55, room_target=23.0)
+        self.assertEqual(sum(a.stop for a in later), 1)
+        rest = self.tick(IDLE, room_target=23.0)
+        self.assertEqual(rest.coolant_limit, self.config.rise_target_c)
+        self.confirmed = self.config.rise_target_c
+        restart = self.tick(IDLE, room_target=23.0)
+        self.assertTrue(restart.start)
+
+    def test_a_raise_waits_for_the_minimum_burn(self):
+        self.ignite()
+        self.run_for(LOW, 5 * 60, pump_hz=1.8, coolant_c=50)
+        waiting = self.run_for(LOW, 10 * 60, pump_hz=1.8, coolant_c=50, room_target=23.0)
+        self.assertFalse(any(a.stop for a in waiting))
+        later = self.run_for(LOW, 10 * 60, pump_hz=1.8, coolant_c=50, room_target=23.0)
+        self.assertEqual(sum(a.stop for a in later), 1)
+
+    def test_a_raise_stops_at_liquid_standby_before_the_minimum_burn(self):
+        self.ignite()
+        self.run_for(LOW, 5 * 60, pump_hz=1.8, coolant_c=58)
+        actions = self.run_for(WAITING, 2 * 60, pump_hz=0.0, coolant_c=60, room_target=23.0)
+        self.assertEqual(sum(a.stop for a in actions), 1)
+
+    def test_a_brief_slider_value_does_not_stop_the_burn(self):
+        self.ignite()
+        self.run_for(LOW, 25 * 60, pump_hz=1.8, coolant_c=55)
+        self.run_for(LOW, 20, pump_hz=1.8, coolant_c=55, room_target=23.0)
+        actions = self.run_for(LOW, 10 * 60, pump_hz=1.8, coolant_c=55)
+        self.assertFalse(any(a.stop for a in actions))
+
+    def test_a_small_raise_waits_for_the_rest(self):
+        self.ignite()
+        self.run_for(LOW, 25 * 60, pump_hz=1.8, coolant_c=55)
+        actions = self.run_for(LOW, 10 * 60, pump_hz=1.8, coolant_c=55, room_target=20.5)
+        self.assertFalse(any(a.stop for a in actions))
+
+    def test_learning_smooths_from_the_heater_value_not_a_computed_one(self):
+        # Field log: a brief RISE computation left 75 °C behind, and the
+        # next target came out halfway, 59 °C, with the heater at 45 °C.
+        a = self.adaptive
+        a.model.reliable = False
+        a.model.c = 0.034
+        a.model.ua = 0.191
+        a.model.last_target = 75.0
+        a.model.last_mode = "intermittent"
+        a._actual_coolant = 45.0
+        target, mode = a._predict_target(7.0, 15.8, 16.0)
+        self.assertEqual(mode, "intermittent")
+        self.assertLessEqual(target, 46.0)
+
+    def test_learning_does_not_smooth_from_rise(self):
+        a = self.adaptive
+        a.model.reliable = False
+        a.model.c = 0.034
+        a.model.ua = 0.191
+        a.model.last_mode = "rise"
+        a._actual_coolant = 75.0
+        smoothed, _ = a._predict_target(7.0, 15.8, 16.0)
+        a.model.reliable = True
+        plain, _ = a._predict_target(7.0, 15.8, 16.0)
+        self.assertAlmostEqual(smoothed, plain)
 
     def test_a_fractional_target_is_written_and_checked_as_whole_degrees(self):
         self.confirmed = 51.0

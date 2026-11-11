@@ -44,7 +44,7 @@ class Settings:
     temperature_entities: str = ""
     outdoor_temperature_entity: str = ""
     adaptive_enabled: bool = False
-    adaptive_coolant_min: float = 45.0
+    adaptive_coolant_min: float = 40.0
     adaptive_coolant_max: float = 85.0
     adaptive_margin_c: float = 3.0
     adaptive_base_step_c: float = 2.0
@@ -249,7 +249,7 @@ def settings_from_options(options: dict) -> Settings:
         temperature_entities=text("temperature", "temperature_entities"),
         outdoor_temperature_entity=text("temperature", "outdoor_temperature_entity"),
         adaptive_enabled=flag("temperature", "adaptive_enabled", False),
-        adaptive_coolant_min=num("temperature", "adaptive_coolant_min", 45),
+        adaptive_coolant_min=num("temperature", "adaptive_coolant_min", 40),
         adaptive_coolant_max=num("temperature", "adaptive_coolant_max", 85),
         adaptive_min_burn_min=num("temperature", "adaptive_min_burn_minutes", 20),
         adaptive_max_stops_6h=int(num("temperature", "adaptive_max_stops_6h", 2)),

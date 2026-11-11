@@ -52,7 +52,7 @@ configuration:
         description: Automatically adjust the liquid standby temperature for longer burns and fewer ignitions. Default off.
       adaptive_coolant_min:
         name: Adaptive coolant minimum
-        description: Lowest liquid target the adaptive algorithm may choose (°C).
+        description: Lowest liquid target the adaptive algorithm may choose (°C). Default 40.
       adaptive_coolant_max:
         name: Adaptive coolant maximum
         description: Highest liquid target the adaptive algorithm may choose (°C).
