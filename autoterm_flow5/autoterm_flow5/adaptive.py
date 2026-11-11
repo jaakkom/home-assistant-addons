@@ -130,6 +130,9 @@ class AdaptiveConfig:
     rise_offset_c: float = 1.0
     rise_exit_c: float = 0.3
     rise_target_c: float = 75.0
+    burn_lower_margin_c: float = 2.0
+    overheat_c: float = 1.0
+    overheat_confirm_s: float = 10 * 60.0
     startup_grace_s: float = 30.0
     verify_retries: int = 3
     verify_timeout_s: float = 45.0
@@ -313,6 +316,11 @@ class AdaptiveController:
         self._holding_since: float | None = None
         self._rest_cleared = False
         self._ua_window: _UaWindow | None = None
+        self._burning_since: float | None = None
+        self._burn_lowered = False
+        self._burn_write: _Verify | None = None
+        self._overheat_since: float | None = None
+        self._restart_below: float | None = None
         self._next_cycle_unlearned = False
         self._soot_burn_active = False
         self._rise_active = False
@@ -418,6 +426,7 @@ class AdaptiveController:
             self._pending_action = None
             self._power_low_since = None
             self._verify = None
+            self._restart_below = None
             if self._awaiting_restart:
                 actions.start = True
             self._awaiting_restart = False
@@ -468,6 +477,10 @@ class AdaptiveController:
         burning = is_burning(state)
         step = classify_step(state, pump_hz) if burning else 0.0
         telemetry_ok = state is not None and coolant_c is not None
+        if not burning:
+            self._burning_since = None
+        elif self._burning_since is None:
+            self._burning_since = now
 
         if telemetry_ok and outdoor_c is not None and room_c is not None:
             if dt > 0:
@@ -539,6 +552,7 @@ class AdaptiveController:
             self._pending_action = None
             self._verify = None
             self._awaiting_restart = False
+            self._restart_below = None
             self._release_hold(actions)
             self._phase = phase
             return actions
@@ -548,7 +562,18 @@ class AdaptiveController:
             LOG.info("Adaptive RISE mode ended: room %.1f °C near target %.1f °C", room_c, room_target)
 
         if phase == "idle":
+            self._burn_lowered = False
+            self._burn_write = None
+            self._overheat_since = None
             self._rest(now, actions, outdoor_c, room_c, room_target, confirmed_coolant)
+            if self._restart_below is not None and self._rest_cleared and room_c < self._restart_below:
+                LOG.info("Room cooled to %.1f °C below target %.1f °C; starting the heater again", room_c, room_target)
+                self._restart_below = None
+                self._awaiting_restart = False
+                actions.hold_start = False
+                actions.start = True
+        else:
+            self._steer_burn(now, actions, burning, outdoor_c, room_c, room_target, confirmed_coolant)
 
         cycle = self._cycle
         if (
@@ -594,6 +619,91 @@ class AdaptiveController:
         self._refresh_status()
         return actions
 
+    def _steer_burn(
+        self,
+        now: float,
+        actions: AdaptiveActions,
+        burning: bool,
+        outdoor_c: float | None,
+        room_c: float,
+        room_target: float,
+        confirmed: float | None,
+    ) -> None:
+        """Keep a burn from heating past the room target.
+
+        The heater looks at the room only once the liquid reaches the coolant
+        target. A target the radiators cannot reach keeps it burning however
+        warm the room gets.
+        """
+        write = self._burn_write
+        if write is not None:
+            if confirmed is not None and abs(confirmed - write.target) < 0.5:
+                LOG.info("Heater took the lower coolant target %.0f °C during the burn", confirmed)
+                self.model.last_target = confirmed
+                self._burn_write = None
+            elif now - write.sent_at >= self.config.verify_timeout_s:
+                LOG.warning("Heater did not take the lower coolant target %.0f °C during the burn", write.target)
+                self._burn_write = None
+
+        if not burning or self._pending_action is not None or self._awaiting_restart:
+            self._overheat_since = None
+            return
+
+        warm = room_c >= room_target - self.config.rise_exit_c
+        actual = self._actual_coolant
+        if warm and not self._burn_lowered and not self._soot_burn_active and actual is not None:
+            desired, mode = self._predict_target(outdoor_c, room_c, room_target, blend=False)
+            if desired < actual - self.config.burn_lower_margin_c:
+                self._burn_lowered = True
+                self._rise_active = False
+                self._burn_write = _Verify(target=desired, sent_at=now)
+                self.model.last_mode = mode
+                actions.coolant_limit = desired
+                actions.save_settings = True
+                actions.save_model = True
+                if self._cycle is not None:
+                    self._cycle.corrections.append(f"burn_lower:{desired:.0f}")
+                LOG.info(
+                    "Room %.1f °C reached target %.1f °C while the heater burns toward %.0f °C; "
+                    "lowering coolant target to %.0f °C",
+                    room_c,
+                    room_target,
+                    actual,
+                    desired,
+                )
+
+        if room_c < room_target + self.config.overheat_c:
+            self._overheat_since = None
+            return
+        if self._overheat_since is None:
+            self._overheat_since = now
+            return
+        burned = 0.0 if self._burning_since is None else now - self._burning_since
+        if now - self._overheat_since < self.config.overheat_confirm_s or burned < self.config.min_burn_s:
+            return
+        target, _mode = self._predict_target(outdoor_c, room_c, room_target, blend=False)
+        if actual is not None:
+            target = min(target, actual)
+        self._pending_action = "overheat_lower"
+        self._pending_target = target
+        self._awaiting_restart = True
+        self._restart_below = room_target
+        self._overheat_since = None
+        self.model.active_stops.append(now)
+        if self._cycle is not None:
+            self._cycle.corrections.append(f"overheat_lower:{target:.0f}")
+        actions.stop = True
+        actions.save_model = True
+        LOG.warning(
+            "Room %.1f °C is %.1f °C over target %.1f °C and the heater keeps burning; stopping it, "
+            "coolant target %.0f °C, start again below %.1f °C",
+            room_c,
+            room_c - room_target,
+            room_target,
+            target,
+            room_target,
+        )
+
     def _enter_fault(self, phase: str, actions: AdaptiveActions) -> None:
         if not self._faulted:
             LOG.warning("Adaptive control entering safe coolant because sensors or heater failed")
@@ -602,6 +712,7 @@ class AdaptiveController:
             self._cycle.learned = False
         self._verify = None
         self._pending_action = None
+        self._restart_below = None
         if self._awaiting_restart:
             actions.start = True
             self._awaiting_restart = False
@@ -710,6 +821,10 @@ class AdaptiveController:
     def _rest_ready(self, actions: AdaptiveActions) -> None:
         self._release_hold(actions)
         self._rest_cleared = True
+        if self._restart_below is not None:
+            # After an overheat stop the heater stays off until the room cools.
+            actions.hold_start = True
+            return
         actions.hold_start = False
         if self._awaiting_restart:
             actions.start = True
@@ -1165,7 +1280,9 @@ class AdaptiveController:
     def _clamp(self, target: float) -> float:
         return min(self.config.coolant_max, max(self.config.coolant_min, target))
 
-    def _predict_target(self, outdoor_c: float | None, room_c: float, room_target: float) -> tuple[float, str]:
+    def _predict_target(
+        self, outdoor_c: float | None, room_c: float, room_target: float, *, blend: bool = True
+    ) -> tuple[float, str]:
         need = self._heat_need(outdoor_c, room_target)
         k = self._k_for(outdoor_c)
         if need > P_MAX:
@@ -1177,7 +1294,7 @@ class AdaptiveController:
             mode = "continuous"
             target = equilibrium_temp(need, room_c, self.model.c) + k
             target = max(target, equilibrium_temp(P_MIN, room_c, self.model.c) + self.config.margin_c)
-        if not self.model.reliable:
+        if blend and not self.model.reliable:
             target = 0.5 * target + 0.5 * self.model.last_target
         return self._clamp(target), mode
 
