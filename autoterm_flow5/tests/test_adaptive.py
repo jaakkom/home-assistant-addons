@@ -236,6 +236,24 @@ class AdaptiveControllerTests(unittest.TestCase):
         done = self.tick(IDLE, confirmed_coolant=target)
         self.assertFalse(done.hold_start)
 
+    def test_a_new_room_target_during_the_rest_rewrites_the_coolant_target(self):
+        self.confirmed = 40.0
+        first = self.tick(IDLE)
+        done = self.tick(IDLE, confirmed_coolant=first.coolant_limit)
+        self.assertFalse(done.hold_start)
+        changed = self.tick(IDLE, confirmed_coolant=first.coolant_limit, room_target=22.0)
+        self.assertEqual(changed.coolant_limit, self.config.rise_target_c)
+        self.assertTrue(changed.hold_start)
+
+    def test_a_new_room_target_during_the_burn_is_written_without_a_stop(self):
+        self.ignite()
+        self.run_for(LOW, 60, pump_hz=1.8, coolant_c=50)
+        changed = self.tick(LOW, pump_hz=1.8, coolant_c=50, room_target=22.0)
+        self.assertEqual(changed.coolant_limit, self.config.rise_target_c)
+        self.assertFalse(changed.stop)
+        later = self.tick(LOW, pump_hz=1.8, coolant_c=50, room_target=22.0)
+        self.assertIsNone(later.coolant_limit)
+
     def test_a_fractional_target_is_written_and_checked_as_whole_degrees(self):
         self.confirmed = 51.0
         self.adaptive._rest_target = lambda *args: 46.68097244113454
