@@ -438,6 +438,13 @@ class UaLearningTests(unittest.TestCase):
         self.assertAlmostEqual(a.model.ua, 0.12, places=3)
         self.assertEqual(len(a._ua_anchors), 1)
 
+    def test_a_room_exactly_three_tenths_away_matches(self):
+        a = self.adaptive
+        a._ua_checkpoint(0.0, 15.4, 45.0)
+        self.advance(3.1, ua=0.12)
+        a._ua_checkpoint(3.1 * 3600, 15.1, 45.0)
+        self.assertEqual(a.model.ua_samples, 1)
+
     def test_a_window_saved_by_0_5_7_is_resumed(self):
         from autoterm_flow5.adaptive import AdaptiveModel
 

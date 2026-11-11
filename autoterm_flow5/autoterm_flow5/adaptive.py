@@ -41,6 +41,7 @@ DEFAULT_FIRST_TARGET = 60.0
 K_BIN_WIDTH = 3.0
 UA_MIN_WINDOW_S = 3 * 3600.0
 UA_MAX_WINDOW_S = 12 * 3600.0
+# Sensors report tenths: 15.4 - 15.1 is 0.3000000000000007 in floating point.
 UA_ROOM_MATCH_C = 0.3
 UA_MIN_MEAN_DELTA_C = 8.0
 UA_MIN_ALPHA = 0.2
@@ -890,7 +891,7 @@ class AdaptiveController:
             (
                 a
                 for a in anchors
-                if totals.seconds - a.seconds >= UA_MIN_WINDOW_S and abs(room_c - a.room_c) <= UA_ROOM_MATCH_C
+                if totals.seconds - a.seconds >= UA_MIN_WINDOW_S and abs(room_c - a.room_c) <= UA_ROOM_MATCH_C + 1e-6
             ),
             None,
         )
