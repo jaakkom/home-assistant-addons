@@ -186,6 +186,10 @@ class SettingsBlockTests(unittest.TestCase):
         self.assertTrue(view["alarm_channel"])
         self.assertFalse(view["pump_with_engine"])
 
+    def test_a_fractional_standby_is_rounded_not_truncated(self):
+        self.assertEqual(patch_heater_settings(FACTORY_SETTINGS, {"coolant_limit": 46.68})[0], 47)
+        self.assertEqual(patch_heater_settings(FACTORY_SETTINGS, {"coolant_limit": 46.4})[0], 46)
+
     def test_a_changed_standby_keeps_the_other_bytes(self):
         updated = patch_heater_settings(FACTORY_SETTINGS, {"coolant_limit": 40})
         self.assertEqual(updated[0], 40)

@@ -193,6 +193,14 @@ class AdaptiveControllerTests(unittest.TestCase):
         done = self.tick(IDLE, confirmed_coolant=target)
         self.assertFalse(done.hold_start)
 
+    def test_a_fractional_target_is_written_and_checked_as_whole_degrees(self):
+        self.confirmed = 51.0
+        self.adaptive._rest_target = lambda *args: 46.68097244113454
+        first = self.tick(IDLE)
+        self.assertEqual(first.coolant_limit, 47.0)
+        done = self.tick(IDLE, confirmed_coolant=47.0)
+        self.assertFalse(done.hold_start)
+
     def test_a_rejected_write_is_retried_three_times_then_started(self):
         self.confirmed = 40.0
         first = self.tick(IDLE)

@@ -304,7 +304,7 @@ def _apply_adaptive_actions(
     changed = False
     if actions.coolant_limit is not None:
         # Always written: the local copy can match while the heater kept its own value.
-        settings.coolant_limit = max(20.0, min(95.0, float(actions.coolant_limit)))
+        settings.coolant_limit = float(max(20, min(95, round(actions.coolant_limit))))
         controller.settings = settings
         controller.note_device_setting("coolant_limit")
         changed = True
