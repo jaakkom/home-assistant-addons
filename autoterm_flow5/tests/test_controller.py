@@ -398,6 +398,20 @@ class RoomThermostatTests(unittest.TestCase):
         idle = controller.tick(700, status(coolant=50), None, 17, 0)
         self.assertNotIn(requested_temperature(16), commands_of(idle))
 
+    def test_a_burn_found_after_a_restart_is_stopped_without_the_minimum_run(self):
+        controller = self.controller()
+        controller.set_heat(True, 0)
+        first = controller.tick(0, status(3, 2, coolant=58), None, 19, 0)
+        later = controller.tick(5, status(3, 2, coolant=58), None, 19, 0)
+        self.assertIn(stop_command(), commands_of(first) + commands_of(later))
+
+    def test_a_cool_room_after_a_restart_keeps_the_burn(self):
+        controller = self.controller()
+        controller.set_heat(True, 0)
+        controller.tick(0, status(3, 2, coolant=58), None, 15, 0)
+        held = controller.tick(5, status(3, 2, coolant=58), None, 16.2, 0)
+        self.assertNotIn(stop_command(), commands_of(held))
+
     def test_old_saved_defaults_move_to_the_smaller_ones(self):
         import json
         import tempfile
