@@ -133,6 +133,7 @@ class Controller:
         self._room_satisfied = False
         self._room_changed_at: float | None = None
         self._idle_since: float | None = None
+        self._room_wait_logged = False
         self._device_raw: bytes | None = None
         self._settings_dirty: set[str] = set()
         self._settings_pending = False
@@ -395,7 +396,9 @@ class Controller:
             self._run_minutes_sent = None
         elif self.heat_enabled and (thermostat or not self.lockout):
             if phase in ACTIVE and self._run_started_at is None:
-                self._run_started_at = now
+                # Found burning after a restart or with heating switched on
+                # mid-burn: it has already had its minimum run.
+                self._run_started_at = now - settings.min_on_s
             commands.extend(
                 self._mode_commands(now, phase, fresh, fault, coolant, voltage, room_age_s)
             )
@@ -522,8 +525,17 @@ class Controller:
         target = settings.room_target
         if not self._room_satisfied:
             if phase in ACTIVE and room_c >= target + settings.room_rise:
-                ran = 0.0 if self._run_started_at is None else now - self._run_started_at
+                ran = settings.min_on_s if self._run_started_at is None else now - self._run_started_at
                 if ran < settings.min_on_s:
+                    if not self._room_wait_logged:
+                        self._room_wait_logged = True
+                        LOG.info(
+                            "Room %.1f °C is above target %.1f + %.1f °C; stopping after the minimum run, in %d min",
+                            room_c,
+                            target,
+                            settings.room_rise,
+                            max(1, round((settings.min_on_s - ran) / 60)),
+                        )
                     return
                 LOG.info(
                     "Room %.1f °C reached target %.1f + %.1f °C; stopping the heater",
@@ -533,6 +545,7 @@ class Controller:
                 )
                 self._room_satisfied = True
                 self._room_changed_at = now
+                self._room_wait_logged = False
                 self._stop_pending = True
                 self._stop_requested = True
                 self._stop_reason = "room"
