@@ -144,6 +144,10 @@ class Controller:
         self._settings_write_at: float | None = None
         self._settings_seen_at: float | None = None
 
+    @property
+    def phase(self) -> str:
+        return self._phase
+
     def set_mode(self, mode: str) -> None:
         if mode in MODES and mode != self.mode:
             self.mode = mode

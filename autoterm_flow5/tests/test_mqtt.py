@@ -46,6 +46,53 @@ class MqttTests(unittest.TestCase):
         apply_command(controller, settings, "autoterm_flow5/set/coolant_limit", "120", 1)
         self.assertEqual(settings.coolant_limit, 95)
 
+    def test_the_card_keeps_heating_on_across_a_restart(self):
+        import tempfile
+        from pathlib import Path
+
+        settings = Settings()
+        controller = Controller(settings)
+        apply_command(controller, settings, "autoterm_flow5/set/climate_mode", "heat", 0)
+        self.assertTrue(settings.heat_on)
+        self.assertEqual(settings.control_mode, "thermostat")
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.json"
+            settings.save(path)
+            self.assertTrue(Settings.load(path).heat_on)
+            apply_command(controller, settings, "autoterm_flow5/set/climate_mode", "off", 1)
+            settings.save(path)
+            self.assertFalse(Settings.load(path).heat_on)
+
+    def test_the_card_shows_heating_idle_and_off(self):
+        from test_controller import status
+
+        settings = Settings()
+        controller = Controller(settings)
+
+        def action():
+            return collect_state(
+                None,
+                None,
+                fuel=FuelMeter(),
+                settings=settings,
+                controller=controller,
+                room_c=None,
+                online=True,
+                telemetry_stale=False,
+                fan_on=False,
+                frequency_hz=0,
+            )["climate_action"]
+
+        self.assertEqual(action(), "off")
+        controller.set_heat(True, 0)
+        controller.tick(0, status(), None, 15, 0)
+        self.assertEqual(action(), "idle")
+        controller.tick(5, status(3, 2, coolant=50), None, 15, 0)
+        self.assertEqual(action(), "heating")
+        decoded = [json.loads(payload) for _topic, payload in discovery_messages()]
+        climate = next(item for item in decoded if item.get("unique_id", "").endswith("_climate"))
+        self.assertEqual(climate["action_topic"], "autoterm_flow5/state/climate_action")
+
     def test_refuel_and_manual_level(self):
         settings = Settings(tank_capacity_l=20)
         controller = Controller(settings)

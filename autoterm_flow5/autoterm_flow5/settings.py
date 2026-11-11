@@ -63,6 +63,8 @@ class Settings:
     simulate_room_c: float = 15.0
     simulate_outdoor_c: float = 0.0
     simulate_fault: int = 0
+    heat_on: bool = False
+    control_mode: str = "thermostat"
 
     def sanitized(self) -> Settings:
         aggregation = self.aggregation if self.aggregation in {"min", "avg", "max"} else "min"
@@ -73,6 +75,8 @@ class Settings:
             room_drop=_clamp(self.room_drop, 0, 10),
             room_rise=_clamp(self.room_rise, 0, 10),
             room_control=bool(self.room_control),
+            heat_on=bool(self.heat_on),
+            control_mode=self.control_mode if self.control_mode in {"thermostat", "preheat", "pump"} else "thermostat",
             min_on_s=_clamp(self.min_on_s, 0, 7200),
             min_off_s=_clamp(self.min_off_s, 0, 7200),
             sensor_stale_s=_clamp(self.sensor_stale_s, 60, 7200),

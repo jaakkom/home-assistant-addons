@@ -364,6 +364,7 @@ def discovery_messages() -> list[tuple[str, str]]:
         "temperature_command_topic": set_topic("room_target"),
         "temperature_state_topic": state_topic("room_target"),
         "current_temperature_topic": state_topic("room"),
+        "action_topic": state_topic("climate_action"),
         "min_temp": 0,
         "max_temp": 40,
         "temp_step": 0.5,
@@ -373,6 +374,14 @@ def discovery_messages() -> list[tuple[str, str]]:
         "device": DEVICE,
     })))
     return messages
+
+
+def _climate_action(controller: Controller) -> str:
+    if not controller.heat_enabled or controller.mode != "thermostat":
+        return "off"
+    if controller.phase in ("starting", "running"):
+        return "heating"
+    return "idle"
 
 
 def collect_state(
@@ -464,6 +473,7 @@ def collect_state(
         "power": "ON" if controller.heat_enabled else "OFF",
         "mode_select": controller.mode,
         "climate_mode": "heat" if controller.heat_enabled and controller.mode == "thermostat" else "off",
+        "climate_action": _climate_action(controller),
         "aggregation": settings.aggregation,
         "circulation": "ON" if settings.circulation_pump else "OFF",
         "coolant_limit": settings.coolant_limit,
@@ -586,6 +596,8 @@ def apply_command(
             _apply_number(settings, key, text)
         except ValueError:
             return None
+    settings.heat_on = controller.heat_enabled
+    settings.control_mode = controller.mode
     controller.settings = settings.sanitized()
     for field_name, value in vars(controller.settings).items():
         setattr(settings, field_name, value)

@@ -59,6 +59,12 @@ def run() -> None:
     else:
         LOG.warning("No room temperature sensor is set. Add it under Temperature entities and restart.")
     controller = Controller(settings)
+    # Home Assistant does not retain card or switch commands, so heating
+    # on/off and the mode have to survive a restart here.
+    controller.set_mode(settings.control_mode)
+    if settings.heat_on:
+        LOG.info("Heating was on before the restart; %s control resumes", settings.control_mode)
+        controller.set_heat(True, time.time())
     adaptive = AdaptiveController(ADAPTIVE_PATH, config_from_settings(settings))
     adaptive.set_manual_coolant(settings.manual_coolant_limit)
     fuel = FuelMeter(FUEL_PATH, settings.pump_dose_ml)
@@ -83,7 +89,16 @@ def run() -> None:
     def on_message(_client, _userdata, message) -> None:
         pending.append((message.topic, message.payload.decode("utf-8", errors="replace")))
 
+    def on_connect(_client, _userdata, _flags, rc) -> None:
+        if rc != 0:
+            return
+        # A reconnect starts a clean session: without this the card's
+        # commands stop arriving and the broker's will leaves us offline.
+        client.subscribe(f"{PREFIX}/set/#")
+        client.publish(f"{PREFIX}/availability", "online", retain=True)
+
     client.on_message = on_message
+    client.on_connect = on_connect
     client.will_set(f"{PREFIX}/availability", "offline", retain=True)
     while True:
         try:
@@ -92,7 +107,6 @@ def run() -> None:
         except Exception as exc:
             LOG.warning("MQTT connection failed (%s), retrying", exc)
             time.sleep(5)
-    client.subscribe(f"{PREFIX}/set/#")
     client.loop_start()
     for topic, payload in discovery_messages():
         client.publish(topic, payload, retain=True)
