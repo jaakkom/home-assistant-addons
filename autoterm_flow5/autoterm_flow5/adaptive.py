@@ -143,6 +143,11 @@ class AdaptiveConfig:
     rise_offset_c: float = 1.0
     rise_exit_c: float = 0.3
     rise_target_c: float = 75.0
+    # A room target raised during a burn stops the burn when the new coolant
+    # target is at least this far above the heater's, once the new room target
+    # has held for raise_settle_s (a card slider passes through values).
+    raise_stop_min_c: float = 3.0
+    raise_settle_s: float = 60.0
     startup_grace_s: float = 30.0
     verify_retries: int = 3
     verify_timeout_s: float = 45.0
@@ -356,6 +361,9 @@ class AdaptiveController:
         self._manual_coolant: float | None = None
         self._wrote_target_this_rest = False
         self._retarget_pending = False
+        self._retarget_from: float | None = None
+        self._raise_since: float | None = None
+        self._raise_from = 0.0
         self._status = "off"
 
     def _load(self) -> AdaptiveModel:
@@ -607,7 +615,11 @@ class AdaptiveController:
 
         if self._retarget_pending:
             self._retarget_pending = False
-            self._retarget(phase, room_target)
+            self._retarget(now, phase, room_target)
+        if phase not in {"starting", "running"}:
+            self._raise_since = None
+        elif self._raise_since is not None and self._pending_action is None and not self._awaiting_restart:
+            self._raise_stop(now, actions, outdoor_c, room_c, room_target)
 
         if phase == "idle":
             self._rest(now, actions, outdoor_c, room_c, room_target, confirmed_coolant)
@@ -691,8 +703,9 @@ class AdaptiveController:
             actions.hold_start = False
         self._holding_since = None
 
-    def _retarget(self, phase: str, room_target: float) -> None:
+    def _retarget(self, now: float, phase: str, room_target: float) -> None:
         """A new room target needs a new coolant target now, not after the next burn."""
+        previous, self._retarget_from = self._retarget_from, None
         if self._pending_action is not None or self._awaiting_restart:
             return
         if phase == "idle":
@@ -707,6 +720,63 @@ class AdaptiveController:
                 "Room target changed to %.1f °C during the burn; the coolant target follows at the next rest",
                 room_target,
             )
+            if previous is not None and room_target > previous:
+                if self._raise_since is None:
+                    self._raise_from = previous
+                self._raise_since = now
+            elif previous is not None and room_target < previous:
+                self._raise_since = None
+
+    def _raise_stop(
+        self,
+        now: float,
+        actions: AdaptiveActions,
+        outdoor_c: float | None,
+        room_c: float,
+        room_target: float,
+    ) -> None:
+        """Stop a burn whose stored coolant target is far below what a raised room target needs.
+
+        The heater only stores a new target at rest, so the burn is stopped,
+        the target written and the heater restarted. The minimum burn time
+        still applies unless the heater already rests in liquid standby.
+        """
+        since = self._raise_since
+        cycle = self._cycle
+        actual = self._actual_coolant
+        if since is None or now - since < self.config.raise_settle_s:
+            return
+        if cycle is None or actual is None:
+            self._raise_since = None
+            return
+        target, mode = self._raise_stop_target(outdoor_c, room_c, room_target)
+        before, _ = self._raise_stop_target(outdoor_c, room_c, self._raise_from)
+        if target < max(actual, before) + self.config.raise_stop_min_c:
+            self._raise_since = None
+            return
+        resting = cycle.burn_started_at is not None and cycle.burn_ended_at is not None
+        if cycle.burn_s < self.config.min_burn_s and not resting:
+            return
+        if not self._stop_allowed(now, urgent=True):
+            return
+        self._raise_since = None
+        if mode == "rise":
+            self._rise_active = True
+        self.model.last_mode = mode
+        cycle.corrections.append(f"target_raise:{target:.0f}")
+        self._pending_action = "target_raise"
+        self._pending_target = target
+        self._awaiting_restart = True
+        self.model.active_stops.append(now)
+        actions.stop = True
+        actions.save_model = True
+        LOG.info(
+            "Room target raised to %.1f °C: stopping to raise coolant %.0f -> %.0f °C (burn %.0f min)",
+            room_target,
+            actual,
+            target,
+            cycle.burn_s / 60,
+        )
 
     def _rest(
         self,
@@ -832,6 +902,8 @@ class AdaptiveController:
         if self._last_room_target is not None and abs(self._last_room_target - room_target) > 0.05:
             changed = True
             self._retarget_pending = True
+            if self._retarget_from is None:
+                self._retarget_from = self._last_room_target
         if self._last_hysteresis is not None and abs(self._last_hysteresis - hysteresis_c) > 0.05:
             changed = True
         self._last_room_target = room_target
@@ -1241,8 +1313,7 @@ class AdaptiveController:
             return False
         if len(recent) >= self.config.max_stops and urgent:
             LOG.warning(
-                "Room is over %.1f °C below target; adaptive stop quota (%d in %.0f h) bypassed",
-                self.config.room_hysteresis_c + self.config.urgent_margin_c,
+                "Adaptive stop quota (%d in %.0f h) bypassed for an urgent raise",
                 self.config.max_stops,
                 window / 3600,
             )
@@ -1258,6 +1329,12 @@ class AdaptiveController:
             return False
         self._quota_warned = False
         return True
+
+    def _raise_stop_target(self, outdoor_c: float | None, room_c: float, room_target: float) -> tuple[float, str]:
+        if room_c < room_target - self.config.rise_offset_c:
+            return self._clamp(self.config.rise_target_c), "rise"
+        target, mode = self._predict_target(outdoor_c, room_c, room_target)
+        return self._clamp(float(math.ceil(target - 0.05))), mode
 
     def _active_correction(
         self,
