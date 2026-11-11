@@ -357,15 +357,15 @@ def patch_heater_settings(raw: bytes, changes: dict[str, object]) -> bytes:
     """Change only the named bytes. Every other stored byte stays as read."""
     data = bytearray(raw)
     if "coolant_limit" in changes:
-        data[0] = max(20, min(95, int(changes["coolant_limit"])))
+        data[0] = max(20, min(95, int(round(changes["coolant_limit"]))))
     if "auxiliary_mode" in changes and changes["auxiliary_mode"] in AUXILIARY_MODES:
         data[1] = AUXILIARY_MODES[str(changes["auxiliary_mode"])]
     if "auxiliary_limit" in changes:
-        data[2] = max(80, min(95, int(changes["auxiliary_limit"])))
+        data[2] = max(80, min(95, int(round(changes["auxiliary_limit"]))))
     if "relay_mode" in changes and changes["relay_mode"] in RELAY_MODES:
         data[3] = RELAY_MODES[str(changes["relay_mode"])]
     if "fan_temperature" in changes:
-        data[4] = max(30, min(60, int(changes["fan_temperature"])))
+        data[4] = max(30, min(60, int(round(changes["fan_temperature"]))))
     if "pump_signal" in changes and changes["pump_signal"] in PUMP_SIGNALS:
         data[5] = PUMP_SIGNALS[str(changes["pump_signal"])]
     if "pump_with_engine" in changes:

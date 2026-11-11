@@ -80,7 +80,7 @@ class Settings:
             min_on_s=_clamp(self.min_on_s, 0, 7200),
             min_off_s=_clamp(self.min_off_s, 0, 7200),
             sensor_stale_s=_clamp(self.sensor_stale_s, 60, 7200),
-            coolant_limit=_clamp(self.coolant_limit, 20, 95),
+            coolant_limit=float(round(_clamp(self.coolant_limit, 20, 95))),
             coolant_drop=_clamp(self.coolant_drop, 1, 40),
             auxiliary_mode=self.auxiliary_mode if self.auxiliary_mode in {"off", "auto", "manual"} else "off",
             auxiliary_limit=_clamp(self.auxiliary_limit, 80, 95),

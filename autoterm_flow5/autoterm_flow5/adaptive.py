@@ -649,6 +649,8 @@ class AdaptiveController:
             self._pending_action = None
         else:
             target = self._rest_target(now, outdoor_c, room_c, room_target)
+        # The heater stores whole degrees.
+        target = float(round(target))
         actual = self._actual_coolant
         if actual is not None and abs(actual - target) < 0.5:
             self.model.last_target = actual
@@ -1151,7 +1153,7 @@ class AdaptiveController:
             )
         else:
             target = predicted
-        target = self._clamp(target)
+        target = self._clamp(float(math.ceil(target - 0.05)))
         if target <= base + 0.4:
             LOG.info("Adaptive %s skipped: coolant target already at the upper limit %.0f °C", kind, base)
             return None
