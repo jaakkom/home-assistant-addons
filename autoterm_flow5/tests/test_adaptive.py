@@ -292,6 +292,64 @@ class AdaptiveControllerTests(unittest.TestCase):
         self.assertEqual(loaded.model.k_bins, {})
 
 
+class UaLearningTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.adaptive = AdaptiveController(Path(self.tmp.name) / "m.json", AdaptiveConfig(enabled=False))
+        self.adaptive._enabled_was = False
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def simulate_house(self, hours, *, ua, mass_kwh_per_c, outdoor, room, pump_hz=3.0):
+        """Thermostat-driven house with stored heat; the heater burns between 19.7 and 20.3 °C."""
+        now, step_s, burning, ignition_left = 0.0, 10.0, False, 0.0
+        heat_kw = power_kw(pump_hz)
+        while now < hours * 3600:
+            if not burning and ignition_left <= 0 and room <= 19.7:
+                ignition_left = 60.0
+            if ignition_left > 0:
+                state, hz = GLOW, 0.0
+                ignition_left -= step_s
+                if ignition_left <= 0:
+                    burning = True
+            elif burning:
+                state, hz = MIDDLE, pump_hz
+                if room >= 20.3:
+                    burning = False
+                    state, hz = IDLE, 0.0
+            else:
+                state, hz = IDLE, 0.0
+            delivered = heat_kw if state == MIDDLE else 0.0
+            room += (delivered - ua * (room - outdoor)) * (step_s / 3600.0) / mass_kwh_per_c
+            now += step_s
+            self.adaptive.tick(
+                now, state=state, phase=PHASES[state], fault=0, heat_enabled=True, mode="thermostat",
+                room_c=room, outdoor_c=outdoor, coolant_c=60.0, pump_hz=hz, room_target=20.0,
+                hysteresis_c=0.6, confirmed_coolant=60.0,
+            )
+
+    def test_warm_up_from_cold_does_not_inflate_ua(self):
+        self.simulate_house(36, ua=0.18, mass_kwh_per_c=3.0, outdoor=0.0, room=12.0, pump_hz=FREQ_HIGH)
+        self.assertGreaterEqual(self.adaptive.model.ua_samples, 2)
+        self.assertAlmostEqual(self.adaptive.model.ua, 0.18, delta=0.02)
+
+    def test_mild_weather_leaves_ua_alone(self):
+        self.simulate_house(36, ua=0.18, mass_kwh_per_c=3.0, outdoor=15.0, room=19.0)
+        self.assertEqual(self.adaptive.model.ua_samples, 0)
+        self.assertAlmostEqual(self.adaptive.model.ua, 0.15)
+
+    def test_version_one_ua_is_discarded(self):
+        from autoterm_flow5.adaptive import AdaptiveModel
+
+        model = AdaptiveModel.from_dict({"ua": 0.27, "c": 0.03, "reliable": True})
+        self.assertAlmostEqual(model.ua, 0.15)
+        self.assertFalse(model.reliable)
+        self.assertAlmostEqual(model.c, 0.03)
+        kept = AdaptiveModel.from_dict(model.to_dict() | {"ua": 0.2})
+        self.assertAlmostEqual(kept.ua, 0.2)
+
+
 class ControllerHoldTests(unittest.TestCase):
     def controller(self):
         controller = Controller(Settings(room_target=14))
