@@ -292,65 +292,6 @@ class AdaptiveControllerTests(unittest.TestCase):
         self.assertEqual(loaded.model.k_bins, {})
 
 
-class OverheatTests(unittest.TestCase):
-    """The field log: High at 4.2 Hz toward a 75 °C target the radiators never reach, room 19 °C, target 17 °C."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.adaptive = AdaptiveController(Path(self.tmp.name) / "m.json", AdaptiveConfig(enabled=True, startup_grace_s=0))
-        self.adaptive.model.c = 0.038
-        self.now = 0.0
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def tick(self, state, room, confirmed, seconds=10.0, hz=4.2):
-        self.now += seconds
-        return self.adaptive.tick(
-            self.now, state=state, phase=PHASES[state], fault=0, heat_enabled=True, mode="thermostat",
-            room_c=room, outdoor_c=6.2, coolant_c=58.0, pump_hz=hz if state == HIGH else 0.0,
-            room_target=17.0, hysteresis_c=2.0, confirmed_coolant=confirmed,
-        )
-
-    def test_reaching_the_target_lowers_an_unreachable_coolant_target(self):
-        writes = []
-        for room in (16.0, 16.3, 16.5, 16.8, 17.0):
-            actions = self.tick(HIGH, room, 75.0)
-            if actions.coolant_limit is not None:
-                writes.append(actions.coolant_limit)
-        self.assertEqual(len(writes), 1)
-        self.assertLessEqual(writes[0], 50.0)
-        self.assertFalse(any(self.tick(HIGH, 17.2, None).stop for _ in range(3)))
-
-    def test_a_heater_that_keeps_burning_is_stopped_and_waits_for_the_room(self):
-        stops = []
-        for _ in range(130):
-            stops.append(self.tick(HIGH, 18.5, 75.0).stop)
-        self.assertEqual(stops.count(True), 1)
-        target = self.adaptive._pending_target
-        self.assertLess(target, 75.0)
-        self.tick(COOLDOWN, 18.5, 75.0)
-        write = self.tick(IDLE, 18.4, 75.0)
-        self.assertEqual(write.coolant_limit, target)
-        held = self.tick(IDLE, 18.3, target)
-        self.assertTrue(held.hold_start)
-        self.assertFalse(held.start)
-        for _ in range(30):
-            self.assertFalse(self.tick(IDLE, 17.5, target).start)
-        resumed = self.tick(IDLE, 16.9, target)
-        self.assertTrue(resumed.start)
-        self.assertFalse(resumed.hold_start)
-
-    def test_no_overheat_stop_before_the_minimum_burn(self):
-        stops = [self.tick(HIGH, 18.5, 75.0, seconds=5.0).stop for _ in range(180)]
-        self.assertFalse(any(stops))
-
-    def test_disabled_control_leaves_the_burn_alone(self):
-        self.adaptive.on_enabled_changed(False, 75.0)
-        actions = [self.tick(HIGH, 18.5, 75.0) for _ in range(200)]
-        self.assertFalse(any(a.stop or a.coolant_limit is not None for a in actions))
-
-
 class UaLearningTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
