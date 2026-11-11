@@ -475,7 +475,7 @@ class Controller:
         # finite run is supposed to end, and an unlimited one is the
         # heater's own session. A fault is left alone.
         del fresh, coolant, voltage, room_age_s
-        if fault or self.start_blocked:
+        if fault:
             return []
         if phase == "cooldown":
             return []
@@ -485,6 +485,11 @@ class Controller:
         if self._thermostat_on and not changed:
             return []
         starting = phase == "idle" and not self._thermostat_on
+        # The adaptive hold blocks only what would start the heater: anything
+        # sent at idle. A new target for a burn already running still has to
+        # reach the heater.
+        if self.start_blocked and (phase == "idle" or not self._thermostat_on):
+            return []
         self._thermostat_on = True
         self._setpoint_c = target
         self._run_minutes_sent = minutes

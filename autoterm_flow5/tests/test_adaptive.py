@@ -383,6 +383,29 @@ class ControllerHoldTests(unittest.TestCase):
         started = controller.tick(1, status(), None, 11, 0)
         self.assertIn(requested_temperature(14), started.commands)
 
+    def test_a_lower_target_reaches_a_running_heater_during_the_hold(self):
+        controller = self.controller()
+        controller.set_heat(True, 0)
+        controller.tick(0, status(), None, 19, 0)
+        controller.tick(1, status(3, 8, coolant=50), None, 19, 0)
+        controller.start_blocked = True
+        controller.settings.room_target = 17
+        lowered = controller.tick(2, status(3, 8, coolant=50), None, 19.5, 0)
+        self.assertIn(requested_temperature(17), lowered.commands)
+
+    def test_a_target_change_at_idle_waits_for_the_hold(self):
+        controller = self.controller()
+        controller.set_heat(True, 0)
+        controller.tick(0, status(), None, 11, 0)
+        controller.tick(1, status(3, 8, coolant=50), None, 11, 0)
+        controller.start_blocked = True
+        controller.settings.room_target = 17
+        held = controller.tick(2, status(), None, 11, 0)
+        self.assertNotIn(requested_temperature(17), held.commands)
+        controller.start_blocked = False
+        sent = controller.tick(3, status(), None, 11, 0)
+        self.assertIn(requested_temperature(17), sent.commands)
+
     def test_confirmed_standby_is_hidden_while_a_write_is_open(self):
         controller = self.controller()
         self.assertEqual(controller.confirmed_standby(), 88.0)
