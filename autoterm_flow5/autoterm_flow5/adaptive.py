@@ -12,7 +12,7 @@ import json
 import logging
 import math
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +45,12 @@ UA_ROOM_MATCH_C = 0.3
 UA_MIN_MEAN_DELTA_C = 8.0
 UA_MIN_ALPHA = 0.2
 UA_LIMITS = (0.02, 1.0)
+# A telemetry or sensor dropout shorter than this keeps the UA window.
+UA_MAX_GAP_S = 5 * 60.0
+# The open window is saved this often, and kept over an add-on restart
+# that took at most UA_RESTART_GAP_S since that save.
+UA_SAVE_EVERY_S = 5 * 60.0
+UA_RESTART_GAP_S = 10 * 60.0
 LIQUID_MASS_LIMITS = (0.01, 0.1)
 MODEL_VERSION = 2
 C_STABLE_S = 600.0
@@ -188,6 +194,7 @@ class AdaptiveModel:
     last_mode: str = ""
     reliable: bool = False
     outdoor_history: deque = field(default_factory=lambda: deque(maxlen=120))
+    ua_window: dict[str, float] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -213,6 +220,7 @@ class AdaptiveModel:
             "last_target": self.last_target,
             "last_mode": self.last_mode,
             "reliable": self.reliable,
+            "ua_window": self.ua_window,
         }
 
     @classmethod
@@ -241,6 +249,12 @@ class AdaptiveModel:
         model.last_target = float(raw.get("last_target", DEFAULT_FIRST_TARGET))
         model.last_mode = str(raw.get("last_mode", ""))
         model.reliable = bool(raw.get("reliable", False))
+        window = raw.get("ua_window")
+        if isinstance(window, dict):
+            try:
+                model.ua_window = {str(k): float(v) for k, v in window.items()}
+            except (TypeError, ValueError):
+                model.ua_window = None
         if int(raw.get("version", 1)) < 2:
             # Version 1 counted heat stored while warming the house as loss.
             LOG.info("Adaptive UA %.3f kW/°C from the old estimate discarded; relearning", model.ua)
@@ -318,6 +332,10 @@ class AdaptiveController:
         self._holding_since: float | None = None
         self._rest_cleared = False
         self._ua_window: _UaWindow | None = None
+        self._ua_gap_s = 0.0
+        self._ua_saved_at: float | None = None
+        self._ua_gap_limit_s = UA_MAX_GAP_S
+        self._ua_restore = self.model.ua_window
         self._next_cycle_unlearned = False
         self._soot_burn_active = False
         self._rise_active = False
@@ -343,6 +361,11 @@ class AdaptiveController:
         return AdaptiveModel.from_dict(raw)
 
     def save(self) -> None:
+        window = self._ua_window
+        if window is not None and self._last_tick_at is not None:
+            self.model.ua_window = {**asdict(window), "saved_at": self._last_tick_at}
+        elif self._ua_restore is None:
+            self.model.ua_window = None
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self.model.to_dict()), encoding="utf-8")
 
@@ -457,6 +480,8 @@ class AdaptiveController:
             self._first_tick_at = now
         dt = 0.0 if self._last_tick_at is None else max(0.0, min(30.0, now - self._last_tick_at))
         self._last_tick_at = now
+        if self._ua_restore is not None:
+            self._restore_ua_window(now)
         if confirmed_coolant is not None:
             self._actual_coolant = confirmed_coolant
         self._update_reliability()
@@ -475,10 +500,24 @@ class AdaptiveController:
         telemetry_ok = state is not None and coolant_c is not None
 
         if telemetry_ok and outdoor_c is not None and room_c is not None:
-            if dt > 0:
-                self._accumulate_ua(dt, room_c, outdoor_c, pump_hz if burning else 0.0)
-        else:
-            self._ua_window = None
+            if dt > 0 or self._ua_gap_s > 0:
+                self._accumulate_ua(dt + self._ua_gap_s, room_c, outdoor_c, pump_hz if burning else 0.0)
+            self._ua_gap_s = 0.0
+            self._ua_gap_limit_s = UA_MAX_GAP_S
+        elif self._ua_window is not None:
+            self._ua_gap_s += dt
+            if self._ua_gap_s > self._ua_gap_limit_s:
+                LOG.info(
+                    "UA window dropped: telemetry or a temperature was missing for %.0f min",
+                    self._ua_gap_s / 60,
+                )
+                self._ua_window = None
+                self._ua_gap_s = 0.0
+        if self._ua_window is not None and (
+            self._ua_saved_at is None or now - self._ua_saved_at >= UA_SAVE_EVERY_S
+        ):
+            self._ua_saved_at = now
+            actions.save_model = True
         if burning and coolant_c is not None and room_c is not None and dt > 0:
             self._observe_stability(now, step, pump_hz, coolant_c, room_c)
 
@@ -789,13 +828,65 @@ class AdaptiveController:
         window.delta_ch += max(0.0, room_c - outdoor_c) * (dt / 3600.0)
         window.seconds += dt
 
+    def _restore_ua_window(self, now: float) -> None:
+        raw = self._ua_restore or {}
+        self._ua_restore = None
+        self.model.ua_window = None
+        saved_at = raw.get("saved_at")
+        gap = None if saved_at is None else now - saved_at
+        if gap is None or not 0 <= gap <= UA_RESTART_GAP_S:
+            LOG.info("UA window from before the restart dropped: the add-on was down too long")
+            return
+        try:
+            window = _UaWindow(
+                started_at=raw["started_at"],
+                room_c=raw["room_c"],
+                coolant_c=raw["coolant_c"],
+                energy_kwh=raw.get("energy_kwh", 0.0),
+                delta_ch=raw.get("delta_ch", 0.0),
+                seconds=raw.get("seconds", 0.0),
+            )
+        except KeyError:
+            return
+        self._ua_window = window
+        self._ua_gap_s = gap
+        self._ua_gap_limit_s = gap + UA_MAX_GAP_S
+        LOG.info(
+            "UA window resumed after the restart: %.1f h collected, room %.1f °C at its start",
+            window.seconds / 3600,
+            window.room_c,
+        )
+
     def _ua_checkpoint(self, now: float, room_c: float, coolant_c: float) -> None:
         """Take a UA sample at an ignition once the room is back where the window began."""
         window = self._ua_window
-        if window is None or now - window.started_at > UA_MAX_WINDOW_S:
+        if window is not None and now - window.started_at > UA_MAX_WINDOW_S:
+            LOG.info(
+                "UA window expired after %.0f h without an ignition at room %.1f ± %.1f °C",
+                UA_MAX_WINDOW_S / 3600,
+                window.room_c,
+                UA_ROOM_MATCH_C,
+            )
+            window = None
+        if window is None:
             self._ua_window = _UaWindow(started_at=now, room_c=room_c, coolant_c=coolant_c)
+            LOG.info(
+                "UA window started at ignition, room %.1f °C; a sample needs an ignition %.0f-%.0f h later "
+                "with the room within %.1f °C",
+                room_c,
+                UA_MIN_WINDOW_S / 3600,
+                UA_MAX_WINDOW_S / 3600,
+                UA_ROOM_MATCH_C,
+            )
             return
         if window.seconds < UA_MIN_WINDOW_S or abs(room_c - window.room_c) > UA_ROOM_MATCH_C:
+            LOG.info(
+                "UA window kept: %.1f h of %.0f h, room %.1f °C now, %.1f °C at its start",
+                window.seconds / 3600,
+                UA_MIN_WINDOW_S / 3600,
+                room_c,
+                window.room_c,
+            )
             return
         self._ua_window = _UaWindow(started_at=now, room_c=room_c, coolant_c=coolant_c)
         hours = window.seconds / 3600.0
