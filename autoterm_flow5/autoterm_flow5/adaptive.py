@@ -120,6 +120,11 @@ class AdaptiveConfig:
     power_confirm_s: float = 30 * 60.0
     stop_lockout_s: float = 90 * 60.0
     max_stops: int = 2
+    # Room further than hysteresis + this below target: the stop quota no
+    # longer applies, stops may come sooner, and low power is not judged by UA.
+    urgent_margin_c: float = 1.0
+    urgent_lockout_s: float = 45 * 60.0
+    urgent_confirm_s: float = 15 * 60.0
     stops_window_s: float = 6 * 3600.0
     min_burn_s: float = 20 * 60.0
     soot_interval_s: float = 24 * 3600.0
@@ -1070,11 +1075,20 @@ class AdaptiveController:
             if self.model.cycle_log:
                 self.model.cycle_log[-1] = stats
 
-    def _stop_allowed(self, now: float) -> bool:
+    def _stop_allowed(self, now: float, urgent: bool = False) -> bool:
         window = self.config.stops_window_s
         recent = [stamp for stamp in self.model.active_stops if now - stamp < window]
-        if recent and now - recent[-1] < self.config.stop_lockout_s:
+        lockout = self.config.urgent_lockout_s if urgent else self.config.stop_lockout_s
+        if recent and now - recent[-1] < lockout:
             return False
+        if len(recent) >= self.config.max_stops and urgent:
+            LOG.warning(
+                "Room is over %.1f °C below target; adaptive stop quota (%d in %.0f h) bypassed",
+                self.config.room_hysteresis_c + self.config.urgent_margin_c,
+                self.config.max_stops,
+                window / 3600,
+            )
+            return True
         if len(recent) >= self.config.max_stops:
             if not self._quota_warned:
                 LOG.warning(
@@ -1105,17 +1119,19 @@ class AdaptiveController:
             self._power_low_since = None
             return None
 
+        urgent = room_c < room_target - self.config.room_hysteresis_c - self.config.urgent_margin_c
+
         # 6.1 Liquid standby while the room is still below the target.
         if cycle.standby_seen and not burning and room_c < room_target:
-            if not self._stop_allowed(now):
+            if not self._stop_allowed(now, urgent):
                 return None
             target = self._raise_target("liquid_standby_raise", outdoor_c, room_c, room_target)
-            return None if target is None else ("liquid_standby_raise", target)
+            return None if target is None else ("liquid_standby_raise", self._urgent_target(target, urgent))
 
         # 6.2 Power insufficient for the confirm time.
         need = self._heat_need(outdoor_c, room_target)
         room_floor = room_target - self.config.room_hysteresis_c - 0.3
-        low_power = burning and step in {FREQ_LOW, FREQ_MID} and power_kw(pump_hz) < need
+        low_power = burning and step in {FREQ_LOW, FREQ_MID} and (urgent or power_kw(pump_hz) < need)
         if not (low_power and room_c < room_floor):
             self._power_low_since = None
             return None
@@ -1124,18 +1140,29 @@ class AdaptiveController:
             self._power_low_room = room_c
             return None
         elapsed = now - self._power_low_since
-        if elapsed < self.config.power_confirm_s:
+        confirm = self.config.urgent_confirm_s if urgent else self.config.power_confirm_s
+        if elapsed < confirm:
             return None
         rate = (room_c - (self._power_low_room or room_c)) / max(elapsed / 3600.0, 1e-3)
         if rate >= 0.2:
             self._power_low_since = now
             self._power_low_room = room_c
             return None
-        if not self._stop_allowed(now):
+        if not self._stop_allowed(now, urgent):
             return None
         self._power_low_since = None
         target = self._raise_target("power_raise", outdoor_c, room_c, room_target)
-        return None if target is None else ("power_raise", target)
+        return None if target is None else ("power_raise", self._urgent_target(target, urgent))
+
+    def _urgent_target(self, target: float, urgent: bool) -> float:
+        """A room this far below target goes straight to RISE instead of a small step."""
+        if not urgent:
+            return target
+        if not self._rise_active:
+            LOG.info("Adaptive RISE mode: room fell over %.1f °C below target during the burn",
+                     self.config.room_hysteresis_c + self.config.urgent_margin_c)
+        self._rise_active = True
+        return max(target, self._clamp(self.config.rise_target_c))
 
     def _raise_target(self, kind: str, outdoor_c: float | None, room_c: float, room_target: float) -> float | None:
         base = self._actual_coolant if self._actual_coolant is not None else self.model.last_target

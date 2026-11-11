@@ -182,6 +182,48 @@ class AdaptiveControllerTests(unittest.TestCase):
         self.adaptive.model.active_stops.append(self.now - 2 * 3600)
         self.assertTrue(self.adaptive._stop_allowed(self.now))
 
+    def test_a_room_far_below_target_bypasses_the_quota_with_a_shorter_lockout(self):
+        self.adaptive.model.active_stops.extend([self.now - 5 * 3600, self.now - 2 * 3600])
+        with self.assertLogs("autoterm_flow5.adaptive", "WARNING"):
+            self.assertTrue(self.adaptive._stop_allowed(self.now, urgent=True))
+        self.adaptive.model.active_stops.append(self.now - 30 * 60)
+        self.assertFalse(self.adaptive._stop_allowed(self.now, urgent=True))
+        self.adaptive.model.active_stops[-1] = self.now - 50 * 60
+        with self.assertLogs("autoterm_flow5.adaptive", "WARNING"):
+            self.assertTrue(self.adaptive._stop_allowed(self.now, urgent=True))
+
+    def test_a_cold_room_at_low_power_is_raised_even_when_ua_says_enough(self):
+        self.adaptive.model.ua = 0.01
+        self.ignite()
+        cold = dict(room_c=16.5, room_target=20.0)
+        actions = self.run_for(LOW, 1200 + 15 * 60 + 60, pump_hz=1.8, coolant_c=50, **cold)
+        self.assertEqual(sum(1 for a in actions if a.stop), 1)
+        self.assertEqual(self.adaptive._pending_action, "power_raise")
+        self.assertEqual(self.adaptive._pending_target, self.config.rise_target_c)
+
+    def test_standby_in_a_cold_room_stops_even_with_the_quota_used(self):
+        self.adaptive.model.active_stops.extend([self.now - 5 * 3600, self.now - 2 * 3600])
+        self.ignite()
+        self.run_for(LOW, 1300, pump_hz=1.8, coolant_c=50)
+        with self.assertLogs("autoterm_flow5.adaptive", "WARNING"):
+            actions = self.run_for(WAITING, 30, pump_hz=0.0, coolant_c=60, room_c=16.5)
+        self.assertEqual(sum(1 for a in actions if a.stop), 1)
+        self.assertEqual(self.adaptive._pending_target, self.config.rise_target_c)
+
+    def test_standby_in_a_mildly_cool_room_respects_the_quota(self):
+        self.adaptive.model.active_stops.extend([self.now - 5 * 3600, self.now - 2 * 3600])
+        self.ignite()
+        self.run_for(LOW, 1300, pump_hz=1.8, coolant_c=50)
+        actions = self.run_for(WAITING, 30, pump_hz=0.0, coolant_c=60, room_c=18.5)
+        self.assertFalse(any(a.stop for a in actions))
+
+    def test_a_mildly_cool_room_still_trusts_ua(self):
+        self.adaptive.model.ua = 0.01
+        cool = dict(room_c=17.5, room_target=20.0)
+        self.ignite()
+        actions = self.run_for(LOW, 1200 + 40 * 60, pump_hz=1.8, coolant_c=50, **cool)
+        self.assertFalse(any(a.stop for a in actions))
+
     def test_rest_writes_holds_and_releases_after_read_back(self):
         self.confirmed = 40.0
         first = self.tick(IDLE)
