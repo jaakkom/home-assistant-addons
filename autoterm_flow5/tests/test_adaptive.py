@@ -351,11 +351,14 @@ class UaLearningTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def simulate_house(self, hours, *, ua, mass_kwh_per_c, outdoor, room, pump_hz=3.0):
-        """Thermostat-driven house with stored heat; the heater burns between 19.7 and 20.3 °C."""
-        now, step_s, burning, ignition_left = 0.0, 10.0, False, 0.0
+    def simulate_house(self, hours, *, ua, mass_kwh_per_c, outdoor, room, pump_hz=3.0, start=0.0, dropout=None):
+        """Thermostat-driven house with stored heat; the heater burns between 19.7 and 20.3 °C.
+
+        dropout=(period_s, length_s) loses telemetry for length_s at the start of every period.
+        """
+        now, step_s, burning, ignition_left = start, 10.0, False, 0.0
         heat_kw = power_kw(pump_hz)
-        while now < hours * 3600:
+        while now < start + hours * 3600:
             if not burning and ignition_left <= 0 and room <= 19.7:
                 ignition_left = 60.0
             if ignition_left > 0:
@@ -373,11 +376,42 @@ class UaLearningTests(unittest.TestCase):
             delivered = heat_kw if state == MIDDLE else 0.0
             room += (delivered - ua * (room - outdoor)) * (step_s / 3600.0) / mass_kwh_per_c
             now += step_s
+            lost = dropout is not None and (now % dropout[0]) < dropout[1]
             self.adaptive.tick(
-                now, state=state, phase=PHASES[state], fault=0, heat_enabled=True, mode="thermostat",
-                room_c=room, outdoor_c=outdoor, coolant_c=60.0, pump_hz=hz, room_target=20.0,
-                hysteresis_c=0.6, confirmed_coolant=60.0,
+                now, state=None if lost else state, phase=PHASES[state], fault=0, heat_enabled=True,
+                mode="thermostat", room_c=room, outdoor_c=outdoor, coolant_c=None if lost else 60.0,
+                pump_hz=hz, room_target=20.0, hysteresis_c=0.6, confirmed_coolant=60.0,
             )
+        return now, room
+
+    def test_short_telemetry_dropouts_keep_the_ua_window(self):
+        self.simulate_house(
+            36, ua=0.18, mass_kwh_per_c=3.0, outdoor=0.0, room=12.0, pump_hz=FREQ_HIGH, dropout=(1800, 120)
+        )
+        self.assertGreaterEqual(self.adaptive.model.ua_samples, 2)
+        self.assertAlmostEqual(self.adaptive.model.ua, 0.18, delta=0.03)
+
+    def test_the_ua_window_survives_a_short_add_on_restart(self):
+        house = dict(ua=0.18, mass_kwh_per_c=3.0, outdoor=0.0, pump_hz=FREQ_HIGH)
+        now, room = self.simulate_house(2, room=19.8, **house)
+        self.assertIsNotNone(self.adaptive._ua_window)
+        collected = self.adaptive._ua_window.seconds
+        self.adaptive.save()
+        self.adaptive = AdaptiveController(Path(self.tmp.name) / "m.json", AdaptiveConfig(enabled=False))
+        self.adaptive._enabled_was = False
+        self.simulate_house(0.01, room=room, start=now + 300, **house)
+        self.assertIsNotNone(self.adaptive._ua_window)
+        self.assertGreater(self.adaptive._ua_window.seconds, collected + 300)
+
+    def test_a_long_add_on_outage_drops_the_ua_window(self):
+        house = dict(ua=0.18, mass_kwh_per_c=3.0, outdoor=0.0, pump_hz=FREQ_HIGH)
+        now, room = self.simulate_house(2, room=19.8, **house)
+        self.adaptive.save()
+        self.adaptive = AdaptiveController(Path(self.tmp.name) / "m.json", AdaptiveConfig(enabled=False))
+        self.adaptive._enabled_was = False
+        self.simulate_house(0.01, room=room, start=now + 3600, **house)
+        window = self.adaptive._ua_window
+        self.assertTrue(window is None or window.started_at >= now + 3600)
 
     def test_warm_up_from_cold_does_not_inflate_ua(self):
         self.simulate_house(36, ua=0.18, mass_kwh_per_c=3.0, outdoor=0.0, room=12.0, pump_hz=FREQ_HIGH)
