@@ -386,12 +386,12 @@ class ControllerHoldTests(unittest.TestCase):
     def test_a_lower_target_reaches_a_running_heater_during_the_hold(self):
         controller = self.controller()
         controller.set_heat(True, 0)
-        controller.tick(0, status(), None, 19, 0)
-        controller.tick(1, status(3, 8, coolant=50), None, 19, 0)
+        controller.tick(0, status(), None, 13, 0)
+        controller.tick(1, status(3, 8, coolant=50), None, 13, 0)
         controller.start_blocked = True
-        controller.settings.room_target = 17
-        lowered = controller.tick(2, status(3, 8, coolant=50), None, 19.5, 0)
-        self.assertIn(requested_temperature(17), lowered.commands)
+        controller.settings.room_target = 12
+        lowered = controller.tick(2, status(3, 8, coolant=50), None, 13, 0)
+        self.assertIn(requested_temperature(12), lowered.commands)
 
     def test_a_target_change_at_idle_waits_for_the_hold(self):
         controller = self.controller()

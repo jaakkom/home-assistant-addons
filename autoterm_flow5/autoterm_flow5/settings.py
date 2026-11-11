@@ -16,6 +16,7 @@ class Settings:
     room_target: float = 20.0
     room_drop: float = 2.0
     room_rise: float = 1.0
+    room_control: bool = True
     min_on_s: float = 600.0
     min_off_s: float = 600.0
     sensor_stale_s: float = 900.0
@@ -71,6 +72,7 @@ class Settings:
             room_target=_clamp(self.room_target, 0, 40),
             room_drop=_clamp(self.room_drop, 0, 10),
             room_rise=_clamp(self.room_rise, 0, 10),
+            room_control=bool(self.room_control),
             min_on_s=_clamp(self.min_on_s, 0, 7200),
             min_off_s=_clamp(self.min_off_s, 0, 7200),
             sensor_stale_s=_clamp(self.sensor_stale_s, 60, 7200),
@@ -208,6 +210,7 @@ def settings_from_options(options: dict) -> Settings:
         room_target=num("temperature", "room_target", 20),
         room_drop=num("temperature", "room_drop", 2),
         room_rise=num("temperature", "room_rise", 1),
+        room_control=flag("temperature", "room_control", True),
         min_on_s=num("timing", "min_on_minutes", 10) * 60,
         min_off_s=num("timing", "min_off_minutes", 10) * 60,
         sensor_stale_s=num("timing", "sensor_stale_minutes", 15) * 60,

@@ -128,6 +128,11 @@ class Controller:
         self._thermostat_on = False
         self._setpoint_c: int | None = None
         self._run_minutes_sent: int | None = None
+        # The add-on's own room thermostat: stop above target + rise, start
+        # again at target - drop. The heater's own thermostat is not relied on.
+        self._room_satisfied = False
+        self._room_changed_at: float | None = None
+        self._idle_since: float | None = None
         self._device_raw: bytes | None = None
         self._settings_dirty: set[str] = set()
         self._settings_pending = False
@@ -147,6 +152,8 @@ class Controller:
     def set_heat(self, enabled: bool, now: float) -> None:
         if enabled != self.heat_enabled:
             self.start_blocked = False
+            self._room_satisfied = False
+            self._room_changed_at = None
         if enabled and not self.heat_enabled:
             self.lockout = False
             self.heat_enabled = True
@@ -346,6 +353,7 @@ class Controller:
             if self.mode == "thermostat":
                 # The heater ended the burn from its own sensor or protection.
                 self._run_started_at = None
+                self._idle_since = now
             elif fault in SELF_STOP_CODES or self._saw_fault_25:
                 self._stop_reason = "fault25"
                 self._stopped_at = now
@@ -354,12 +362,17 @@ class Controller:
             elif fault == 0 and not self.lockout and self._stop_reason is None and self.heat_enabled:
                 self._note_unexpected_stop(now, coolant)
 
-        if self.heat_enabled and self.mode == "thermostat":
-            self.demand = True
-        elif not self.heat_enabled or self.mode != "thermostat":
+        thermostat = self.mode == "thermostat"
+        if self.heat_enabled and thermostat and settings.room_control:
+            self._room_thermostat(now, phase, fresh, room_c)
+        else:
+            self._room_satisfied = False
+
+        if self.heat_enabled and thermostat:
+            self.demand = not self._room_satisfied
+        else:
             self.demand = False
 
-        thermostat = self.mode == "thermostat"
         if phase not in ACTIVE:
             # Cooldown and idle are the heater's own stop. Do not keep sending it.
             self._stop_requested = False
@@ -477,6 +490,8 @@ class Controller:
         del fresh, coolant, voltage, room_age_s
         if fault:
             return []
+        if self.settings.room_control and self._room_satisfied:
+            return []
         if phase == "cooldown":
             return []
         target = max(0, min(40, int(round(self.settings.room_target))))
@@ -498,6 +513,64 @@ class Controller:
             self._start_at = now
             self._stop_reason = None
         return [requested_temperature(target, minutes)]
+
+    def _room_thermostat(self, now: float, phase: str, fresh: bool, room_c: float | None) -> None:
+        """Stop and start from the room sensor instead of trusting the heater's thermostat."""
+        if not fresh or room_c is None:
+            return
+        settings = self.settings
+        target = settings.room_target
+        if not self._room_satisfied:
+            if phase in ACTIVE and room_c >= target + settings.room_rise:
+                ran = 0.0 if self._run_started_at is None else now - self._run_started_at
+                if ran < settings.min_on_s:
+                    return
+                LOG.info(
+                    "Room %.1f °C reached target %.1f + %.1f °C; stopping the heater",
+                    room_c,
+                    target,
+                    settings.room_rise,
+                )
+                self._room_satisfied = True
+                self._room_changed_at = now
+                self._stop_pending = True
+                self._stop_requested = True
+                self._stop_reason = "room"
+                self._stopped_at = now
+            elif phase == "idle" and not self._thermostat_on and room_c >= target:
+                LOG.info("Room %.1f °C is already at target %.1f °C; the heater waits", room_c, target)
+                self._room_satisfied = True
+                self._room_changed_at = now
+            elif (
+                phase == "idle"
+                and self._thermostat_on
+                and self._run_started_at is None
+                and self._idle_since is not None
+                and now - self._idle_since >= settings.min_off_s
+                and int(settings.run_minutes) <= 0
+                and room_c <= target - settings.room_drop
+            ):
+                LOG.info("Heater is idle and the room is %.1f °C; starting it again", room_c)
+                self._thermostat_on = False
+                self._setpoint_c = None
+                self._run_minutes_sent = None
+            return
+        if room_c > target - settings.room_drop:
+            return
+        if self._room_changed_at is not None and now - self._room_changed_at < settings.min_off_s:
+            return
+        LOG.info(
+            "Room %.1f °C fell to target %.1f - %.1f °C; starting the heater",
+            room_c,
+            target,
+            settings.room_drop,
+        )
+        self._room_satisfied = False
+        self._room_changed_at = now
+        self._stop_reason = None
+        self._thermostat_on = False
+        self._setpoint_c = None
+        self._run_minutes_sent = None
 
     def _note_unexpected_stop(self, now: float, coolant: float | None) -> None:
         """The burner left an active phase with no fault and no stop from us.

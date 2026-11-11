@@ -20,6 +20,7 @@ _SWITCHES = {
     "pump_standby",
     "alarm_channel",
     "adaptive_enabled",
+    "room_control",
 }
 _PRESSED = {"stop", "fuel_reset", "fuel_refuel", "adaptive_reset"}
 _CHOICES = {
@@ -32,6 +33,7 @@ _CHOICES = {
 _NUMBERS = {
     "room_target",
     "room_drop",
+    "room_rise",
     "sensor_stale",
     "coolant_limit",
     "auxiliary_limit",
@@ -295,7 +297,7 @@ const TEXT = {
     adaptive_coolant_target: "Adaptive coolant target", adaptive_actual_coolant: "Confirmed coolant target", adaptive_ua: "UA", adaptive_c: "Radiator C",
     adaptive_ignitions_day: "Ignitions / day", adaptive_avg_run_s: "Average run",
     adaptive_room_error: "Room error",
-    mode: "Mode", aggregation: "Aggregation", room_target: "Room target", room_drop: "Room hysteresis",
+    mode: "Mode", aggregation: "Aggregation", room_target: "Room target", room_drop: "Room hysteresis", room_control: "Add-on thermostat", room_rise: "Stop above target",
     sensor_stale: "Sensor stale (min)", preheat_minutes: "Preheat (min)",
     run_minutes: "Run time (min, 0 unlimited)", coolant_limit: "Standby temperature",
     auxiliary_mode: "Auxiliary heater", auxiliary_limit: "Auxiliary standby",
@@ -335,7 +337,7 @@ const TEXT = {
     adaptive_coolant_target: "Laskettu nestetavoite", adaptive_actual_coolant: "Vahvistettu nestetavoite", adaptive_ua: "UA", adaptive_c: "Patterikerroin C",
     adaptive_ignitions_day: "Sytytyksiä / vrk", adaptive_avg_run_s: "Keskim. käynti",
     adaptive_room_error: "Huonevirhe",
-    mode: "Ohjaus", aggregation: "Yhdistäminen", room_target: "Huonetavoite", room_drop: "Huonehystereesi",
+    mode: "Ohjaus", aggregation: "Yhdistäminen", room_target: "Huonetavoite", room_drop: "Huonehystereesi", room_control: "Lisäosan termostaatti", room_rise: "Sammutus yli tavoitteen",
     sensor_stale: "Anturin vanheneminen (min)", preheat_minutes: "Esilämmitys (min)",
     run_minutes: "Käyntiaika (min, 0 ääretön)", coolant_limit: "Odotuslämpötila",
     auxiliary_mode: "Lisälämmitys", auxiliary_limit: "Lisälämmityksen odotus",
@@ -399,6 +401,8 @@ const FIELDS = [
   {key: "aggregation", type: "select", options: ["min", "avg", "max"]},
   {key: "room_target", min: 0, max: 40, step: 0.5},
   {key: "room_drop", min: 0, max: 10, step: 0.5},
+  {key: "room_control", type: "switch"},
+  {key: "room_rise", min: 0, max: 10, step: 0.5},
   {key: "run_minutes", min: 0, max: 720, step: 1},
   {key: "sensor_stale", min: 1, max: 120, step: 1},
   {key: "preheat_minutes", min: 1, max: 480, step: 1},
