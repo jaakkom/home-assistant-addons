@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -394,14 +395,16 @@ class UaLearningTests(unittest.TestCase):
     def test_the_ua_window_survives_a_short_add_on_restart(self):
         house = dict(ua=0.18, mass_kwh_per_c=3.0, outdoor=0.0, pump_hz=FREQ_HIGH)
         now, room = self.simulate_house(2, room=19.8, **house)
-        self.assertIsNotNone(self.adaptive._ua_window)
-        collected = self.adaptive._ua_window.seconds
+        self.assertIsNotNone(self.adaptive._ua_totals)
+        collected = self.adaptive._ua_totals.seconds
+        first = self.adaptive._ua_anchors[0].at
         self.adaptive.save()
         self.adaptive = AdaptiveController(Path(self.tmp.name) / "m.json", AdaptiveConfig(enabled=False))
         self.adaptive._enabled_was = False
         self.simulate_house(0.01, room=room, start=now + 300, **house)
-        self.assertIsNotNone(self.adaptive._ua_window)
-        self.assertGreater(self.adaptive._ua_window.seconds, collected + 300)
+        self.assertIsNotNone(self.adaptive._ua_totals)
+        self.assertGreater(self.adaptive._ua_totals.seconds, collected + 300)
+        self.assertEqual(self.adaptive._ua_anchors[0].at, first)
 
     def test_a_long_add_on_outage_drops_the_ua_window(self):
         house = dict(ua=0.18, mass_kwh_per_c=3.0, outdoor=0.0, pump_hz=FREQ_HIGH)
@@ -410,8 +413,45 @@ class UaLearningTests(unittest.TestCase):
         self.adaptive = AdaptiveController(Path(self.tmp.name) / "m.json", AdaptiveConfig(enabled=False))
         self.adaptive._enabled_was = False
         self.simulate_house(0.01, room=room, start=now + 3600, **house)
-        window = self.adaptive._ua_window
-        self.assertTrue(window is None or window.started_at >= now + 3600)
+        self.assertTrue(all(anchor.at >= now + 3600 for anchor in self.adaptive._ua_anchors))
+
+    def advance(self, hours, *, ua=0.15, difference=10.0):
+        totals = self.adaptive._ua_totals
+        totals.energy_kwh += ua * difference * hours
+        totals.delta_ch += difference * hours
+        totals.seconds += hours * 3600
+
+    def test_a_first_window_at_another_room_temperature_does_not_block_learning(self):
+        # Field log: heating resumed after a restart at 15.4 °C, the add-on
+        # thermostat then lit the heater at 15.0 °C every time.
+        a = self.adaptive
+        a._ua_checkpoint(0.0, 15.4, 45.0)
+        self.advance(1.2, ua=0.12)
+        a._ua_checkpoint(1.2 * 3600, 15.0, 45.0)
+        for hour in (2.4, 3.6):
+            self.advance(1.2, ua=0.12)
+            a._ua_checkpoint(hour * 3600, 15.0, 45.0)
+        self.assertEqual(a.model.ua_samples, 0)
+        self.advance(1.2, ua=0.12)
+        a._ua_checkpoint(4.8 * 3600, 15.1, 45.0)
+        self.assertEqual(a.model.ua_samples, 1)
+        self.assertAlmostEqual(a.model.ua, 0.12, places=3)
+        self.assertEqual(len(a._ua_anchors), 1)
+
+    def test_a_window_saved_by_0_5_7_is_resumed(self):
+        from autoterm_flow5.adaptive import AdaptiveModel
+
+        path = Path(self.tmp.name) / "old.json"
+        model = AdaptiveModel()
+        model.ua_window = {
+            "started_at": 0.0, "room_c": 15.0, "coolant_c": 45.0,
+            "energy_kwh": 4.0, "delta_ch": 25.0, "seconds": 9000.0, "saved_at": 9000.0,
+        }
+        path.write_text(json.dumps(model.to_dict()))
+        adaptive = AdaptiveController(path, AdaptiveConfig(enabled=False))
+        adaptive._restore_ua_window(9100.0)
+        self.assertEqual(adaptive._ua_totals.seconds, 9000.0)
+        self.assertEqual(adaptive._ua_anchors[0].room_c, 15.0)
 
     def test_warm_up_from_cold_does_not_inflate_ua(self):
         self.simulate_house(36, ua=0.18, mass_kwh_per_c=3.0, outdoor=0.0, room=12.0, pump_hz=FREQ_HIGH)
