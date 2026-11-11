@@ -40,6 +40,8 @@ The algorithm can stop and restart only to raise the target: after liquid standb
 
 When the room is more than 1 °C below target (RISE mode), a high target of 75 °C is used with no active corrections. In RISE mode UA and C are still learned but the K corrections are not. RISE ends when the room is within 0.3 °C of target. Enabling the feature during a run only observes that cycle. After the add-on starts, it waits 30 seconds for telemetry before falling back to the safe coolant target.
 
+UA (heat loss in kW per °C of indoor–outdoor difference) is measured between two ignitions at least three hours apart where the room is back within 0.3 °C of where it began. Heat stored in the house while it warms up therefore does not count as loss. Windows longer than twelve hours, or with a mean indoor–outdoor difference below 8 °C, are skipped. UA is learned even while the feature is off. A UA learned by version 0.5.1 or older is discarded once, because that version counted warm-up heat as loss.
+
 Turning the feature off restores your previous manual coolant target on the next idle. Learned values are kept in `/data/adaptive_model.json` across restarts. Use **Reset adaptive learning** to clear them.
 
 The sidebar and Home Assistant show adaptive status (`off` / `learning` / `active`), mode (`continuous` / `intermittent` / `maximum` / `rise`), the last computed coolant target, the target confirmed by the heater, ignitions per day, and the learned UA and C.

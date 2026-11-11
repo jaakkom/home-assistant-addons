@@ -39,13 +39,18 @@ DEFAULT_T_EQ_AT_2KW = 50.0
 DEFAULT_COOLANT_DROP = 18.0
 DEFAULT_FIRST_TARGET = 60.0
 K_BIN_WIDTH = 3.0
-UA_WINDOW_S = 4 * 3600.0
-UA_FAST_TAU_S = 3600.0
-UA_SLOW_TAU_S = 18 * 3600.0
+UA_MIN_WINDOW_S = 3 * 3600.0
+UA_MAX_WINDOW_S = 12 * 3600.0
+UA_ROOM_MATCH_C = 0.3
+UA_MIN_MEAN_DELTA_C = 8.0
+UA_MIN_ALPHA = 0.2
+UA_LIMITS = (0.02, 1.0)
+LIQUID_MASS_LIMITS = (0.01, 0.1)
+MODEL_VERSION = 2
 C_STABLE_S = 600.0
 C_STABLE_DELTA = 0.5
 MODEL_MIN_C_SAMPLES = 3
-MODEL_MIN_UA_S = 3 * 3600.0
+MODEL_MIN_UA_SAMPLES = 2
 OUTDOOR_RAPID_C_PER_H = 3.0
 OUTDOOR_MAX_AGE_S = 1800.0
 HOLD_MAX_S = 300.0
@@ -143,6 +148,18 @@ class AdaptiveActions:
 
 
 @dataclass
+class _UaWindow:
+    """Energy balance between two ignitions; heat stored in the house cancels when the room ends where it began."""
+
+    started_at: float
+    room_c: float
+    coolant_c: float
+    energy_kwh: float = 0.0
+    delta_ch: float = 0.0
+    seconds: float = 0.0
+
+
+@dataclass
 class AdaptiveModel:
     ua: float = DEFAULT_UA
     c: float = field(default_factory=default_c)
@@ -155,9 +172,7 @@ class AdaptiveModel:
     threshold_up: list[float] = field(default_factory=list)
     threshold_down: list[float] = field(default_factory=list)
     c_samples: int = 0
-    ua_integral_energy: float = 0.0
-    ua_integral_dtdt: float = 0.0
-    ua_seconds: float = 0.0
+    ua_samples: int = 0
     last_high_power_at: float | None = None
     ignitions: deque = field(default_factory=lambda: deque(maxlen=500))
     active_stops: deque = field(default_factory=lambda: deque(maxlen=50))
@@ -171,6 +186,7 @@ class AdaptiveModel:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "version": MODEL_VERSION,
             "ua": self.ua,
             "c": self.c,
             "coolant_drop_c": self.coolant_drop_c,
@@ -182,9 +198,7 @@ class AdaptiveModel:
             "threshold_up": list(self.threshold_up)[-40:],
             "threshold_down": list(self.threshold_down)[-40:],
             "c_samples": self.c_samples,
-            "ua_integral_energy": self.ua_integral_energy,
-            "ua_integral_dtdt": self.ua_integral_dtdt,
-            "ua_seconds": self.ua_seconds,
+            "ua_samples": self.ua_samples,
             "last_high_power_at": self.last_high_power_at,
             "ignitions": list(self.ignitions)[-200:],
             "active_stops": list(self.active_stops),
@@ -211,9 +225,7 @@ class AdaptiveModel:
         model.threshold_up = [float(v) for v in raw.get("threshold_up", [])][-40:]
         model.threshold_down = [float(v) for v in raw.get("threshold_down", [])][-40:]
         model.c_samples = int(raw.get("c_samples", 0))
-        model.ua_integral_energy = float(raw.get("ua_integral_energy", 0.0))
-        model.ua_integral_dtdt = float(raw.get("ua_integral_dtdt", 0.0))
-        model.ua_seconds = float(raw.get("ua_seconds", 0.0))
+        model.ua_samples = int(raw.get("ua_samples", 0))
         high = raw.get("last_high_power_at")
         model.last_high_power_at = None if high is None else float(high)
         model.ignitions = deque((float(v) for v in raw.get("ignitions", [])), maxlen=500)
@@ -224,6 +236,12 @@ class AdaptiveModel:
         model.last_target = float(raw.get("last_target", DEFAULT_FIRST_TARGET))
         model.last_mode = str(raw.get("last_mode", ""))
         model.reliable = bool(raw.get("reliable", False))
+        if int(raw.get("version", 1)) < 2:
+            # Version 1 counted heat stored while warming the house as loss.
+            LOG.info("Adaptive UA %.3f kW/°C from the old estimate discarded; relearning", model.ua)
+            model.ua = DEFAULT_UA
+            model.ua_samples = 0
+            model.reliable = False
         return model
 
 
@@ -294,6 +312,7 @@ class AdaptiveController:
         self._awaiting_restart = False
         self._holding_since: float | None = None
         self._rest_cleared = False
+        self._ua_window: _UaWindow | None = None
         self._next_cycle_unlearned = False
         self._soot_burn_active = False
         self._rise_active = False
@@ -450,9 +469,11 @@ class AdaptiveController:
         step = classify_step(state, pump_hz) if burning else 0.0
         telemetry_ok = state is not None and coolant_c is not None
 
-        if telemetry_ok and outdoor_c is not None and room_c is not None and dt > 0:
-            self._accumulate_ua(dt, room_c, outdoor_c, pump_hz if burning else 0.0)
-            actions.save_model = True
+        if telemetry_ok and outdoor_c is not None and room_c is not None:
+            if dt > 0:
+                self._accumulate_ua(dt, room_c, outdoor_c, pump_hz if burning else 0.0)
+        else:
+            self._ua_window = None
         if burning and coolant_c is not None and room_c is not None and dt > 0:
             self._observe_stability(now, step, pump_hz, coolant_c, room_c)
 
@@ -477,6 +498,9 @@ class AdaptiveController:
         self._faulted = False
 
         entering_ignition = phase == "starting" and self._phase != "starting"
+        if entering_ignition:
+            self._ua_checkpoint(now, room_c, coolant_c)
+            actions.save_model = True
         if entering_ignition and heat_enabled and mode == "thermostat":
             if self._cycle is not None:
                 self._learn_relight_drop(coolant_c)
@@ -719,7 +743,7 @@ class AdaptiveController:
 
     def _update_reliability(self) -> None:
         self.model.reliable = (
-            self.model.c_samples >= MODEL_MIN_C_SAMPLES and self.model.ua_seconds >= MODEL_MIN_UA_S
+            self.model.c_samples >= MODEL_MIN_C_SAMPLES and self.model.ua_samples >= MODEL_MIN_UA_SAMPLES
         )
 
     def _settings_changed(self, room_target: float, hysteresis_c: float) -> bool:
@@ -751,19 +775,50 @@ class AdaptiveController:
         return abs(history[-1][1] - older[1]) > OUTDOOR_RAPID_C_PER_H
 
     def _accumulate_ua(self, dt: float, room_c: float, outdoor_c: float, pump_hz: float) -> None:
-        self.model.ua_integral_energy += power_kw(pump_hz) * (dt / 3600.0)
-        self.model.ua_integral_dtdt += max(0.0, room_c - outdoor_c) * (dt / 3600.0)
-        self.model.ua_seconds += dt
-        if self.model.ua_seconds > UA_WINDOW_S:
-            keep = UA_WINDOW_S / self.model.ua_seconds
-            self.model.ua_integral_energy *= keep
-            self.model.ua_integral_dtdt *= keep
-            self.model.ua_seconds = UA_WINDOW_S
-        if self.model.ua_integral_dtdt > 0.05:
-            measured = self.model.ua_integral_energy / self.model.ua_integral_dtdt
-            tau = UA_FAST_TAU_S if self.model.ua_seconds < MODEL_MIN_UA_S else UA_SLOW_TAU_S
-            alpha = 1.0 - math.exp(-dt / tau)
-            self.model.ua = (1.0 - alpha) * self.model.ua + alpha * measured
+        window = self._ua_window
+        if window is None:
+            return
+        window.energy_kwh += power_kw(pump_hz) * (dt / 3600.0)
+        window.delta_ch += max(0.0, room_c - outdoor_c) * (dt / 3600.0)
+        window.seconds += dt
+
+    def _ua_checkpoint(self, now: float, room_c: float, coolant_c: float) -> None:
+        """Take a UA sample at an ignition once the room is back where the window began."""
+        window = self._ua_window
+        if window is None or now - window.started_at > UA_MAX_WINDOW_S:
+            self._ua_window = _UaWindow(started_at=now, room_c=room_c, coolant_c=coolant_c)
+            return
+        if window.seconds < UA_MIN_WINDOW_S or abs(room_c - window.room_c) > UA_ROOM_MATCH_C:
+            return
+        self._ua_window = _UaWindow(started_at=now, room_c=room_c, coolant_c=coolant_c)
+        hours = window.seconds / 3600.0
+        mean_delta = window.delta_ch / hours
+        if mean_delta < UA_MIN_MEAN_DELTA_C:
+            LOG.info(
+                "UA window skipped: mean indoor-outdoor difference %.1f °C is too small to measure",
+                mean_delta,
+            )
+            return
+        mass = self.model.thermal_mass_kwh_per_c
+        liquid_mass = LIQUID_MASS_LIMITS[0] if mass is None else _bounded(mass, *LIQUID_MASS_LIMITS)
+        energy = window.energy_kwh - liquid_mass * (coolant_c - window.coolant_c)
+        measured = _bounded(energy / window.delta_ch, *UA_LIMITS)
+        alpha = max(1.0 / (self.model.ua_samples + 1), UA_MIN_ALPHA)
+        previous = self.model.ua
+        self.model.ua = (1.0 - alpha) * previous + alpha * measured
+        self.model.ua_samples += 1
+        LOG.info(
+            "UA sample %.3f kW/°C over %.1f h (heat %.1f kWh, mean difference %.1f °C, room %.1f -> %.1f °C); "
+            "UA %.3f -> %.3f kW/°C",
+            measured,
+            hours,
+            energy,
+            mean_delta,
+            window.room_c,
+            room_c,
+            previous,
+            self.model.ua,
+        )
 
     def _observe_stability(self, now: float, step: float, pump_hz: float, coolant_c: float, room_c: float) -> None:
         if step <= 0 or coolant_c <= room_c + 1:
@@ -1129,7 +1184,7 @@ class AdaptiveController:
     def _needs_soot_burn(self, now: float) -> bool:
         last = self.model.last_high_power_at
         if last is None:
-            return self.model.ua_seconds > 3600
+            return len(self.model.ignitions) >= 3
         return now - last >= self.config.soot_interval_s
 
     def _k_key(self, outdoor_c: float | None) -> str:
@@ -1192,6 +1247,10 @@ def config_from_settings(settings: Any) -> AdaptiveConfig:
         rise_offset_c=float(getattr(settings, "adaptive_rise_offset_c", 1.0)),
         rise_target_c=float(getattr(settings, "adaptive_rise_target_c", 75.0)),
     )
+
+
+def _bounded(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
 
 
 def _num(value: float | None) -> str:
