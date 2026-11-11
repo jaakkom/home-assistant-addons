@@ -607,7 +607,7 @@ class AdaptiveController:
 
         if self._retarget_pending:
             self._retarget_pending = False
-            self._retarget(now, actions, phase, outdoor_c, room_c, room_target)
+            self._retarget(phase, room_target)
 
         if phase == "idle":
             self._rest(now, actions, outdoor_c, room_c, room_target, confirmed_coolant)
@@ -691,15 +691,7 @@ class AdaptiveController:
             actions.hold_start = False
         self._holding_since = None
 
-    def _retarget(
-        self,
-        now: float,
-        actions: AdaptiveActions,
-        phase: str,
-        outdoor_c: float | None,
-        room_c: float,
-        room_target: float,
-    ) -> None:
+    def _retarget(self, phase: str, room_target: float) -> None:
         """A new room target needs a new coolant target now, not after the next burn."""
         if self._pending_action is not None or self._awaiting_restart:
             return
@@ -709,21 +701,12 @@ class AdaptiveController:
             self._wrote_target_this_rest = False
             self._rest_cleared = False
             return
-        if phase not in {"starting", "running"}:
-            return
-        target = float(round(self._rest_target(now, outdoor_c, room_c, room_target)))
-        actual = self._actual_coolant
-        if actual is not None and abs(actual - target) < 0.5:
-            return
-        LOG.info(
-            "Room target changed to %.1f °C during the burn; writing coolant target %.0f °C (heater has %s)",
-            room_target,
-            target,
-            "unknown" if actual is None else f"{actual:.0f} °C",
-        )
-        actions.coolant_limit = target
-        actions.save_settings = True
-        actions.save_model = True
+        if phase in {"starting", "running"}:
+            # This Flow 5 keeps its stored settings while it burns.
+            LOG.info(
+                "Room target changed to %.1f °C during the burn; the coolant target follows at the next rest",
+                room_target,
+            )
 
     def _rest(
         self,
@@ -1381,8 +1364,11 @@ class AdaptiveController:
             mode = "continuous"
             target = equilibrium_temp(need, room_c, self.model.c) + k
             target = max(target, equilibrium_temp(P_MIN, room_c, self.model.c) + self.config.margin_c)
-        if not self.model.reliable:
-            target = 0.5 * target + 0.5 * self.model.last_target
+        if not self.model.reliable and self.model.last_mode != "rise":
+            # Move halfway from what the heater holds, not from a target that
+            # was only computed. RISE's 75 °C is not a starting point.
+            anchor = self._actual_coolant if self._actual_coolant is not None else self.model.last_target
+            target = 0.5 * target + 0.5 * anchor
         return self._clamp(target), mode
 
     def _needs_soot_burn(self, now: float) -> bool:
