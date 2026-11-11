@@ -355,6 +355,7 @@ class AdaptiveController:
         self._restore_manual_pending = False
         self._manual_coolant: float | None = None
         self._wrote_target_this_rest = False
+        self._retarget_pending = False
         self._status = "off"
 
     def _load(self) -> AdaptiveModel:
@@ -604,6 +605,10 @@ class AdaptiveController:
             self._rise_active = False
             LOG.info("Adaptive RISE mode ended: room %.1f °C near target %.1f °C", room_c, room_target)
 
+        if self._retarget_pending:
+            self._retarget_pending = False
+            self._retarget(now, actions, phase, outdoor_c, room_c, room_target)
+
         if phase == "idle":
             self._rest(now, actions, outdoor_c, room_c, room_target, confirmed_coolant)
 
@@ -685,6 +690,40 @@ class AdaptiveController:
         if self._holding_since is not None:
             actions.hold_start = False
         self._holding_since = None
+
+    def _retarget(
+        self,
+        now: float,
+        actions: AdaptiveActions,
+        phase: str,
+        outdoor_c: float | None,
+        room_c: float,
+        room_target: float,
+    ) -> None:
+        """A new room target needs a new coolant target now, not after the next burn."""
+        if self._pending_action is not None or self._awaiting_restart:
+            return
+        if phase == "idle":
+            LOG.info("Room target changed to %.1f °C; recomputing the coolant target", room_target)
+            self._verify = None
+            self._wrote_target_this_rest = False
+            self._rest_cleared = False
+            return
+        if phase not in {"starting", "running"}:
+            return
+        target = float(round(self._rest_target(now, outdoor_c, room_c, room_target)))
+        actual = self._actual_coolant
+        if actual is not None and abs(actual - target) < 0.5:
+            return
+        LOG.info(
+            "Room target changed to %.1f °C during the burn; writing coolant target %.0f °C (heater has %s)",
+            room_target,
+            target,
+            "unknown" if actual is None else f"{actual:.0f} °C",
+        )
+        actions.coolant_limit = target
+        actions.save_settings = True
+        actions.save_model = True
 
     def _rest(
         self,
@@ -809,6 +848,7 @@ class AdaptiveController:
         changed = False
         if self._last_room_target is not None and abs(self._last_room_target - room_target) > 0.05:
             changed = True
+            self._retarget_pending = True
         if self._last_hysteresis is not None and abs(self._last_hysteresis - hysteresis_c) > 0.05:
             changed = True
         self._last_room_target = room_target
