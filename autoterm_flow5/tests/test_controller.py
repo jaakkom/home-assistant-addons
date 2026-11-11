@@ -398,6 +398,23 @@ class RoomThermostatTests(unittest.TestCase):
         idle = controller.tick(700, status(coolant=50), None, 17, 0)
         self.assertNotIn(requested_temperature(16), commands_of(idle))
 
+    def test_old_saved_defaults_move_to_the_smaller_ones(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.json"
+            path.write_text(json.dumps({"room_drop": 2.0, "room_rise": 1.0}))
+            migrated = Settings.load(path)
+            self.assertEqual((migrated.room_drop, migrated.room_rise), (1.0, 0.5))
+            path.write_text(json.dumps({"room_drop": 3.0, "room_rise": 1.0}))
+            chosen = Settings.load(path)
+            self.assertEqual((chosen.room_drop, chosen.room_rise), (3.0, 1.0))
+            path.write_text(json.dumps({"room_drop": 2.0, "room_rise": 1.0, "room_control": True}))
+            kept = Settings.load(path)
+            self.assertEqual((kept.room_drop, kept.room_rise), (2.0, 1.0))
+
     def test_switched_off_room_control_leaves_it_to_the_heater(self):
         controller = self.controller(room_control=False)
         controller.set_heat(True, 0)

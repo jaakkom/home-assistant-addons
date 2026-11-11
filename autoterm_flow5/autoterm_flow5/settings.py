@@ -14,8 +14,8 @@ def _clamp(value: float, low: float, high: float) -> float:
 @dataclass
 class Settings:
     room_target: float = 20.0
-    room_drop: float = 2.0
-    room_rise: float = 1.0
+    room_drop: float = 1.0
+    room_rise: float = 0.5
     room_control: bool = True
     min_on_s: float = 600.0
     min_off_s: float = 600.0
@@ -144,6 +144,11 @@ class Settings:
         for key in data:
             if key in raw:
                 data[key] = raw[key]
+        # Files saved before the add-on thermostat carry the old 2 / 1 °C
+        # defaults, which were never shown to the user as a choice.
+        if "room_control" not in raw and raw.get("room_drop") == 2.0 and raw.get("room_rise") == 1.0:
+            data["room_drop"] = base.room_drop
+            data["room_rise"] = base.room_rise
         return cls(**data).sanitized()
 
 
@@ -208,8 +213,8 @@ def settings_from_options(options: dict) -> Settings:
 
     return Settings(
         room_target=num("temperature", "room_target", 20),
-        room_drop=num("temperature", "room_drop", 2),
-        room_rise=num("temperature", "room_rise", 1),
+        room_drop=num("temperature", "room_drop", 1),
+        room_rise=num("temperature", "room_rise", 0.5),
         room_control=flag("temperature", "room_control", True),
         min_on_s=num("timing", "min_on_minutes", 10) * 60,
         min_off_s=num("timing", "min_off_minutes", 10) * 60,
