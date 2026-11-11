@@ -107,6 +107,27 @@ def _number(
     return {"component": "number", "key": key, "payload": payload}
 
 
+# Undecoded bytes, whole frames and per-second counters. The add-on page
+# still shows them; in Home Assistant they only fill the logbook and the
+# recorder, so they are not published and their old entities are removed.
+RAW_KEYS = frozenset({
+    "status_hex",
+    "ext_hex",
+    "voltage_like",
+    "rising_sensor",
+    "coolant_a",
+    "coolant_b",
+    "elapsed_minutes",
+    "elapsed_seconds",
+    "cooldown_counter",
+    "runtime",
+})
+
+
+def is_raw(key: str) -> bool:
+    return key in RAW_KEYS or key.startswith(("status_byte_", "ext_byte_"))
+
+
 def discovery_messages() -> list[tuple[str, str]]:
     entities: list[dict[str, Any]] = [
         _sensor("mode", "Operating mode"),
@@ -204,6 +225,11 @@ def discovery_messages() -> list[tuple[str, str]]:
     messages = []
     for entity in entities:
         topic = f"homeassistant/{entity['component']}/{PREFIX}/{entity['key']}/config"
+        if is_raw(entity["key"]):
+            # An empty retained config removes the entity from Home Assistant.
+            messages.append((topic, ""))
+            messages.append((state_topic(entity["key"]), ""))
+            continue
         messages.append((topic, json.dumps(entity["payload"], ensure_ascii=False)))
 
     messages.append((f"homeassistant/switch/{PREFIX}/power/config", json.dumps({
@@ -671,7 +697,7 @@ def mqtt_state_updates(values: dict[str, str], previous: dict[str, str] | None =
     """
     updates: dict[str, str] = {}
     for key, value in values.items():
-        if value == "":
+        if value == "" or is_raw(key):
             continue
         if previous is not None and previous.get(key) == value:
             continue

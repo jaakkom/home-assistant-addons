@@ -15,7 +15,7 @@ class MqttTests(unittest.TestCase):
         self.assertIn("Fault code", blob)
         self.assertIn("Fuel consumption", blob)
         self.assertIn("Coolant limit", blob)
-        decoded = [json.loads(payload) for _topic, payload in discovery_messages()]
+        decoded = [json.loads(payload) for _topic, payload in discovery_messages() if payload]
         names = {item.get("name") for item in decoded}
         self.assertIn("Fault text", names)
         self.assertIn("Fuel consumption", names)
@@ -29,9 +29,16 @@ class MqttTests(unittest.TestCase):
         self.assertIn("Adaptive coolant control", names)
         self.assertIn("Reset adaptive learning", names)
         self.assertIn("Adaptive control status", names)
-        diagnostic = [item for item in decoded if item.get("entity_category") == "diagnostic"]
-        self.assertTrue(any(item.get("name", "").startswith("Status byte") for item in diagnostic))
-        self.assertTrue(any(item.get("name", "").startswith("Extended byte") for item in diagnostic))
+        self.assertFalse(any(item.get("name", "").startswith(("Status byte", "Extended byte")) for item in decoded))
+        self.assertNotIn("Extended frame hex", names)
+        removed = {topic for topic, payload in discovery_messages() if payload == ""}
+        self.assertIn("homeassistant/sensor/autoterm_flow5/ext_byte_7/config", removed)
+        self.assertIn("homeassistant/sensor/autoterm_flow5/ext_hex/config", removed)
+        self.assertIn("autoterm_flow5/state/ext_byte_7", removed)
+
+    def test_raw_bytes_are_not_published(self):
+        updates = mqtt_state_updates({"ext_byte_7": "176", "ext_hex": "0001", "status_byte_5": "1", "room": "16.10"})
+        self.assertEqual(updates, {"room": "16.10"})
 
     def test_coolant_limit_command_is_clamped_and_kept(self):
         settings = Settings()
@@ -89,7 +96,7 @@ class MqttTests(unittest.TestCase):
         self.assertEqual(action(), "idle")
         controller.tick(5, status(3, 2, coolant=50), None, 15, 0)
         self.assertEqual(action(), "heating")
-        decoded = [json.loads(payload) for _topic, payload in discovery_messages()]
+        decoded = [json.loads(payload) for _topic, payload in discovery_messages() if payload]
         climate = next(item for item in decoded if item.get("unique_id", "").endswith("_climate"))
         self.assertEqual(climate["action_topic"], "autoterm_flow5/state/climate_action")
 
