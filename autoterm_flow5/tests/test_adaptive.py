@@ -14,6 +14,8 @@ from autoterm_flow5.adaptive import (
     P_MIN,
     AdaptiveConfig,
     AdaptiveController,
+    _UaAnchor,
+    _UaTotals,
     classify_step,
     default_c,
     equilibrium_temp,
@@ -543,6 +545,23 @@ class UaLearningTests(unittest.TestCase):
                 pump_hz=hz, room_target=20.0, hysteresis_c=0.6, confirmed_coolant=60.0,
             )
         return now, room
+
+    def test_a_mild_day_still_gives_a_ua_sample(self):
+        # Field log: room 14 °C, outdoor 7 °C; a matching window was skipped
+        # at a mean difference of 7.1 °C.
+        self.simulate_house(12, ua=0.18, mass_kwh_per_c=3.0, outdoor=13.0, room=20.0, pump_hz=FREQ_HIGH)
+        self.assertGreaterEqual(self.adaptive.model.ua_samples, 1)
+
+    def test_a_skipped_window_keeps_the_other_windows(self):
+        a = self.adaptive
+        a._ua_totals = _UaTotals(energy_kwh=8.0, delta_ch=8.0, seconds=4 * 3600.0)
+        a._ua_anchors = [
+            _UaAnchor(at=0.0, room_c=15.0, coolant_c=40.0, energy_kwh=0.0, delta_ch=0.0, seconds=0.0),
+            _UaAnchor(at=3600.0, room_c=18.0, coolant_c=40.0, energy_kwh=2.0, delta_ch=2.0, seconds=3600.0),
+        ]
+        a._ua_checkpoint(4 * 3600.0, 15.0, 40.0)
+        self.assertEqual(a.model.ua_samples, 0)
+        self.assertEqual([x.room_c for x in a._ua_anchors], [18.0, 15.0])
 
     def test_short_telemetry_dropouts_keep_the_ua_window(self):
         self.simulate_house(

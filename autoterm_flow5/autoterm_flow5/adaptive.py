@@ -46,7 +46,7 @@ UA_ROOM_MATCH_C = 0.3
 STEP_GAP_MIN_SAMPLES = 3
 # Gaps above this are a cold start, not the heater's step-up threshold.
 STEP_GAP_MAX_C = 30.0
-UA_MIN_MEAN_DELTA_C = 8.0
+UA_MIN_MEAN_DELTA_C = 5.0
 UA_MIN_ALPHA = 0.2
 UA_LIMITS = (0.02, 1.0)
 # A telemetry or sensor dropout shorter than this keeps the UA window.
@@ -932,7 +932,7 @@ class AdaptiveController:
     def _outdoor_changing_fast(self, now: float) -> bool:
         history = self.model.outdoor_history
         if len(history) < 2:
-            return
+            return False
         older = None
         for stamp, value in history:
             if now - stamp >= 3600.0:
@@ -1007,10 +1007,11 @@ class AdaptiveController:
             ),
             None,
         )
-        if match is not None:
-            self._ua_sample(match, totals, room_c, coolant_c)
+        if match is not None and self._ua_sample(match, totals, room_c, coolant_c):
             # Later windows overlap the one just used; start fresh from here.
             anchors = []
+        elif match is not None:
+            anchors = [a for a in anchors if a is not match]
         elif anchors:
             oldest = anchors[0]
             LOG.info(
@@ -1042,7 +1043,7 @@ class AdaptiveController:
         ))
         self._ua_anchors = anchors[-UA_MAX_ANCHORS:]
 
-    def _ua_sample(self, anchor: _UaAnchor, totals: _UaTotals, room_c: float, coolant_c: float) -> None:
+    def _ua_sample(self, anchor: _UaAnchor, totals: _UaTotals, room_c: float, coolant_c: float) -> bool:
         seconds = totals.seconds - anchor.seconds
         delta_ch = totals.delta_ch - anchor.delta_ch
         hours = seconds / 3600.0
@@ -1073,6 +1074,7 @@ class AdaptiveController:
             previous,
             self.model.ua,
         )
+        return True
 
     def _observe_stability(self, now: float, step: float, pump_hz: float, coolant_c: float, room_c: float) -> None:
         if step <= 0 or coolant_c <= room_c + 1:
