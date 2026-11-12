@@ -361,6 +361,7 @@ class AdaptiveController:
         self._manual_coolant: float | None = None
         self._wrote_target_this_rest = False
         self._retarget_pending = False
+        self._room_stopped = False
         self._retarget_from: float | None = None
         self._raise_since: float | None = None
         self._raise_from = 0.0
@@ -495,8 +496,10 @@ class AdaptiveController:
         room_target: float,
         hysteresis_c: float,
         confirmed_coolant: float | None,
+        room_stopped: bool = False,
     ) -> AdaptiveActions:
         actions = AdaptiveActions()
+        self._room_stopped = room_stopped
         if self._first_tick_at is None:
             self._first_tick_at = now
         dt = 0.0 if self._last_tick_at is None else max(0.0, min(30.0, now - self._last_tick_at))
@@ -1152,7 +1155,10 @@ class AdaptiveController:
             return
         target = cycle.coolant_target
         if (
-            cycle.burn_started_at is not None
+            # After the add-on thermostat's stop, the heater's cooldown at a
+            # liquid near target is not the heater reaching its target.
+            not self._room_stopped
+            and cycle.burn_started_at is not None
             and state in STANDBY_STATES
             and target is not None
             and coolant_c >= target - self.config.standby_band_c

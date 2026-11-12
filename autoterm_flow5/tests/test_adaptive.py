@@ -282,6 +282,14 @@ class AdaptiveControllerTests(unittest.TestCase):
         actions = self.run_for(WAITING, 2 * 60, pump_hz=0.0, coolant_c=60, room_target=23.0)
         self.assertEqual(sum(a.stop for a in actions), 1)
 
+    def test_cooldown_after_the_room_stop_is_not_liquid_standby(self):
+        # Field log: the add-on stopped at 14.5 °C, the heater cooled down at
+        # 39 °C with a 41 °C target, and the cycle was counted as standby.
+        self.ignite()
+        self.run_for(LOW, 30 * 60, pump_hz=1.8, coolant_c=39)
+        self.run_for(COOLDOWN, 3 * 60, pump_hz=0.0, coolant_c=59, room_stopped=True)
+        self.assertFalse(self.adaptive._cycle.standby_seen)
+
     def test_a_brief_slider_value_does_not_stop_the_burn(self):
         self.ignite()
         self.run_for(LOW, 25 * 60, pump_hz=1.8, coolant_c=55)
