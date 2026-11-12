@@ -43,6 +43,9 @@ UA_MIN_WINDOW_S = 3 * 3600.0
 UA_MAX_WINDOW_S = 12 * 3600.0
 # Sensors report tenths: 15.4 - 15.1 is 0.3000000000000007 in floating point.
 UA_ROOM_MATCH_C = 0.3
+STEP_GAP_MIN_SAMPLES = 3
+# Gaps above this are a cold start, not the heater's step-up threshold.
+STEP_GAP_MAX_C = 30.0
 UA_MIN_MEAN_DELTA_C = 8.0
 UA_MIN_ALPHA = 0.2
 UA_LIMITS = (0.02, 1.0)
@@ -147,6 +150,12 @@ class AdaptiveConfig:
     # target is at least this far above the heater's, once the new room target
     # has held for raise_settle_s (a card slider passes through values).
     raise_stop_min_c: float = 3.0
+    # The heater leaves Low only when the liquid is this far below its stored
+    # target; replaced by the learned median once there are enough samples.
+    step_up_gap_c: float = 10.0
+    # A burn at Low or Mid with the room this far below target and not
+    # rising counts as underpowered without asking the learned UA.
+    stall_margin_c: float = 0.3
     raise_settle_s: float = 60.0
     startup_grace_s: float = 30.0
     verify_retries: int = 3
@@ -199,6 +208,7 @@ class AdaptiveModel:
     step_halves: dict[str, int] = field(default_factory=dict)
     threshold_up: list[float] = field(default_factory=list)
     threshold_down: list[float] = field(default_factory=list)
+    low_exit_gaps: list[float] = field(default_factory=list)
     c_samples: int = 0
     ua_samples: int = 0
     last_high_power_at: float | None = None
@@ -226,6 +236,7 @@ class AdaptiveModel:
             "step_halves": dict(self.step_halves),
             "threshold_up": list(self.threshold_up)[-40:],
             "threshold_down": list(self.threshold_down)[-40:],
+            "low_exit_gaps": list(self.low_exit_gaps)[-40:],
             "c_samples": self.c_samples,
             "ua_samples": self.ua_samples,
             "last_high_power_at": self.last_high_power_at,
@@ -254,6 +265,7 @@ class AdaptiveModel:
         model.step_halves = {str(k): int(v) for k, v in dict(raw.get("step_halves", {})).items()}
         model.threshold_up = [float(v) for v in raw.get("threshold_up", [])][-40:]
         model.threshold_down = [float(v) for v in raw.get("threshold_down", [])][-40:]
+        model.low_exit_gaps = [float(v) for v in raw.get("low_exit_gaps", [])][-40:]
         model.c_samples = int(raw.get("c_samples", 0))
         model.ua_samples = int(raw.get("ua_samples", 0))
         high = raw.get("last_high_power_at")
@@ -425,6 +437,7 @@ class AdaptiveController:
             "adaptive_ua": f"{self.model.ua:.4f}",
             "adaptive_c": f"{self.model.c:.5f}",
             "adaptive_coolant_drop": f"{self.model.coolant_drop_c:.1f}",
+            "adaptive_step_up_gap": f"{self._step_up_gap():.1f}",
             "adaptive_ignitions_day": str(self.ignitions_last_day()),
             "adaptive_avg_run_s": _num(self.average_run_s()),
             "adaptive_room_error": _num(self.average_room_error()),
@@ -645,6 +658,7 @@ class AdaptiveController:
                 outdoor_c=outdoor_c,
                 pump_hz=pump_hz,
                 room_target=room_target,
+                coolant_c=coolant_c,
             )
             if correction is not None:
                 kind, target = correction
@@ -918,7 +932,7 @@ class AdaptiveController:
     def _outdoor_changing_fast(self, now: float) -> bool:
         history = self.model.outdoor_history
         if len(history) < 2:
-            return False
+            return
         older = None
         for stamp, value in history:
             if now - stamp >= 3600.0:
@@ -1038,7 +1052,7 @@ class AdaptiveController:
                 "UA window skipped: mean indoor-outdoor difference %.1f °C is too small to measure",
                 mean_delta,
             )
-            return
+            return False
         mass = self.model.thermal_mass_kwh_per_c
         liquid_mass = LIQUID_MASS_LIMITS[0] if mass is None else _bounded(mass, *LIQUID_MASS_LIMITS)
         energy = totals.energy_kwh - anchor.energy_kwh - liquid_mass * (coolant_c - anchor.coolant_c)
@@ -1146,6 +1160,9 @@ class AdaptiveController:
             if cycle.last_step and step != cycle.last_step and cycle.coolant_target is not None:
                 gap = cycle.coolant_target - coolant_c
                 (self.model.threshold_up if step > cycle.last_step else self.model.threshold_down).append(gap)
+                if step > cycle.last_step and cycle.last_step == FREQ_LOW and 0.0 < gap <= STEP_GAP_MAX_C:
+                    self.model.low_exit_gaps = (self.model.low_exit_gaps + [gap])[-40:]
+                    LOG.info("Heater left Low %.1f °C below its coolant target", gap)
             cycle.last_step = step
             return
         if cycle.burn_started_at is not None and cycle.burn_ended_at is None:
@@ -1354,6 +1371,7 @@ class AdaptiveController:
         outdoor_c: float | None,
         pump_hz: float,
         room_target: float,
+        coolant_c: float | None = None,
     ) -> tuple[str, float] | None:
         del state
         if cycle.burn_s < self.config.min_burn_s:
@@ -1372,8 +1390,12 @@ class AdaptiveController:
         # 6.2 Power insufficient for the confirm time.
         need = self._heat_need(outdoor_c, room_target)
         room_floor = room_target - self.config.room_hysteresis_c - 0.3
-        low_power = burning and step in {FREQ_LOW, FREQ_MID} and (urgent or power_kw(pump_hz) < need)
-        if not (low_power and room_c < room_floor):
+        low_step = burning and step in {FREQ_LOW, FREQ_MID}
+        by_model = low_step and (urgent or power_kw(pump_hz) < need) and room_c < room_floor
+        # The heater can sit at Low with its liquid short of the step-up gap
+        # while the room stalls; the room trend shows it even when UA cannot.
+        by_room = low_step and room_c < room_target - self.config.stall_margin_c
+        if not (by_model or by_room):
             self._power_low_since = None
             return None
         if self._power_low_since is None:
@@ -1392,7 +1414,8 @@ class AdaptiveController:
         if not self._stop_allowed(now, urgent):
             return None
         self._power_low_since = None
-        target = self._raise_target("power_raise", outdoor_c, room_c, room_target)
+        liquid = coolant_c if coolant_c is not None else cycle.coolant_max
+        target = self._raise_target("power_raise", outdoor_c, room_c, room_target, liquid)
         return None if target is None else ("power_raise", self._urgent_target(target, urgent))
 
     def _urgent_target(self, target: float, urgent: bool) -> float:
@@ -1405,7 +1428,14 @@ class AdaptiveController:
         self._rise_active = True
         return max(target, self._clamp(self.config.rise_target_c))
 
-    def _raise_target(self, kind: str, outdoor_c: float | None, room_c: float, room_target: float) -> float | None:
+    def _raise_target(
+        self,
+        kind: str,
+        outdoor_c: float | None,
+        room_c: float,
+        room_target: float,
+        liquid_c: float | None = None,
+    ) -> float | None:
         base = self._actual_coolant if self._actual_coolant is not None else self.model.last_target
         step = self._step_size(outdoor_c, raise_k=True)
         self._adjust_k(outdoor_c, step, raise_k=True)
@@ -1421,11 +1451,29 @@ class AdaptiveController:
             )
         else:
             target = predicted
+        if liquid_c is not None:
+            leave_low = liquid_c + self._step_up_gap() + 1.0
+            if target < leave_low:
+                LOG.info(
+                    "Adaptive %s: raising to %.1f °C so the heater leaves Low (liquid %.1f °C, step-up gap %.1f °C)",
+                    kind,
+                    leave_low,
+                    liquid_c,
+                    self._step_up_gap(),
+                )
+                target = leave_low
         target = self._clamp(float(math.ceil(target - 0.05)))
         if target <= base + 0.4:
             LOG.info("Adaptive %s skipped: coolant target already at the upper limit %.0f °C", kind, base)
             return None
         return target
+
+    def _step_up_gap(self) -> float:
+        gaps = sorted(self.model.low_exit_gaps)
+        if len(gaps) < STEP_GAP_MIN_SAMPLES:
+            return self.config.step_up_gap_c
+        middle = len(gaps) // 2
+        return gaps[middle] if len(gaps) % 2 else 0.5 * (gaps[middle - 1] + gaps[middle])
 
     def _heat_need(self, outdoor_c: float | None, room_target: float) -> float:
         if outdoor_c is None:
@@ -1446,7 +1494,10 @@ class AdaptiveController:
         else:
             mode = "continuous"
             target = equilibrium_temp(need, room_c, self.model.c) + k
-            target = max(target, equilibrium_temp(P_MIN, room_c, self.model.c) + self.config.margin_c)
+            low_liquid = equilibrium_temp(P_MIN, room_c, self.model.c)
+            # Low alone is not enough here, so the stored target must sit far
+            # enough above Low's liquid for the heater to step up.
+            target = max(target, low_liquid + self.config.margin_c, low_liquid + self._step_up_gap() + 1.0)
         if not self.model.reliable and self.model.last_mode != "rise":
             # Move halfway from what the heater holds, not from a target that
             # was only computed. RISE's 75 °C is not a starting point.

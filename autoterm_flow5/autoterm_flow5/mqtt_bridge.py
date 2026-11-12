@@ -211,6 +211,7 @@ def discovery_messages() -> list[tuple[str, str]]:
         _sensor("adaptive_avg_run_s", "Average run time", unit="s", state_class="measurement", diagnostic=True),
         _sensor("adaptive_room_error", "Room temperature error", unit="°C", state_class="measurement", diagnostic=True),
         _sensor("adaptive_k_table", "Adaptive K table", diagnostic=True),
+        _sensor("adaptive_step_up_gap", "Adaptive step-up gap", unit="°C", diagnostic=True),
         _number("adaptive_coolant_min", "Adaptive coolant minimum", 20, 95, 1, "°C", category="config"),
         _number("adaptive_coolant_max", "Adaptive coolant maximum", 20, 95, 1, "°C", category="config"),
         _number("room_drop", "Room hysteresis", 0, 10, 0.5, "°C", category="config"),
@@ -545,6 +546,7 @@ def collect_state(
         values.setdefault("adaptive_k_table", "")
         values.setdefault("adaptive_reliable", "OFF")
         values.setdefault("adaptive_coolant_drop", "")
+        values.setdefault("adaptive_step_up_gap", "")
     if status is not None:
         for index, value in status.unmapped.items():
             values[f"status_byte_{index}"] = value

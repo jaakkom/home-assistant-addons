@@ -218,11 +218,44 @@ class AdaptiveControllerTests(unittest.TestCase):
         actions = self.run_for(WAITING, 30, pump_hz=0.0, coolant_c=60, room_c=18.5)
         self.assertFalse(any(a.stop for a in actions))
 
-    def test_a_mildly_cool_room_still_trusts_ua(self):
+    def test_a_stalled_room_at_low_stops_even_when_ua_says_low_is_enough(self):
+        # Field log: target 47, Low held the liquid at 42 for 40 min while the
+        # room fell; a 5 °C gap never made the heater step up.
         self.adaptive.model.ua = 0.01
         cool = dict(room_c=17.5, room_target=20.0)
         self.ignite()
         actions = self.run_for(LOW, 1200 + 40 * 60, pump_hz=1.8, coolant_c=50, **cool)
+        self.assertEqual(sum(a.stop for a in actions), 1)
+        rest = self.tick(IDLE, **cool)
+        self.assertGreaterEqual(rest.coolant_limit, 50 + self.config.step_up_gap_c + 1)
+
+    def test_field_case_low_at_42_against_47_is_raised_past_the_gap(self):
+        self.confirmed = 47.0
+        self.adaptive.model.ua = 0.191
+        self.ignite(room_c=19.1, room_target=20.0)
+        actions = []
+        room = 19.1
+        for _ in range(int((1200 + 40 * 60) / 10)):
+            room = max(18.6, room - 0.6 / 360)
+            actions.append(self.tick(LOW, 10.0, pump_hz=1.8, coolant_c=42.0, room_c=room, room_target=20.0))
+        self.assertEqual(sum(a.stop for a in actions), 1)
+        rest = self.tick(IDLE, room_c=room, room_target=20.0)
+        self.assertGreaterEqual(rest.coolant_limit, 42 + self.config.step_up_gap_c + 1)
+
+    def test_a_slowly_warming_room_at_low_is_not_stopped(self):
+        self.adaptive.model.ua = 0.01
+        self.ignite()
+        room = 17.5
+        actions = []
+        for _ in range(int((1200 + 40 * 60) / 10)):
+            room += 0.5 / 360
+            actions.append(self.tick(LOW, 10.0, pump_hz=1.8, coolant_c=50, room_c=room, room_target=20.0))
+        self.assertFalse(any(a.stop for a in actions))
+
+    def test_a_room_near_target_at_low_is_not_stopped(self):
+        self.adaptive.model.ua = 0.01
+        self.ignite()
+        actions = self.run_for(LOW, 1200 + 40 * 60, pump_hz=1.8, coolant_c=50, room_c=19.8, room_target=20.0)
         self.assertFalse(any(a.stop for a in actions))
 
     def test_rest_writes_holds_and_releases_after_read_back(self):
@@ -316,6 +349,39 @@ class AdaptiveControllerTests(unittest.TestCase):
         target, mode = a._predict_target(7.0, 15.8, 16.0)
         self.assertEqual(mode, "intermittent")
         self.assertLessEqual(target, 46.0)
+
+    def test_a_continuous_target_lets_the_heater_leave_low(self):
+        a = self.adaptive
+        a.model.reliable = True
+        a.model.c = 0.0348
+        a.model.ua = 0.191
+        target, mode = a._predict_target(7.1, 18.9, 20.0)
+        self.assertEqual(mode, "continuous")
+        low_liquid = equilibrium_temp(P_MIN, 18.9, a.model.c)
+        self.assertGreaterEqual(target, low_liquid + self.config.step_up_gap_c + 1 - 1e-6)
+
+    def test_an_intermittent_target_ignores_the_step_up_gap(self):
+        a = self.adaptive
+        a.model.reliable = True
+        a.model.c = 0.0336
+        a.model.ua = 0.191
+        target, mode = a._predict_target(6.0, 14.0, 14.0)
+        self.assertEqual(mode, "intermittent")
+        self.assertAlmostEqual(target, max(self.config.coolant_min,
+                               equilibrium_temp(P_MIN, 14.0, a.model.c) + self.config.margin_c), places=6)
+
+    def test_the_step_up_gap_is_learned_from_leaving_low(self):
+        a = self.adaptive
+        self.assertEqual(a._step_up_gap(), self.config.step_up_gap_c)
+        self.confirmed = 60.0
+        self.ignite()
+        for liquid in (52.0, 53.0, 54.0):
+            self.run_for(LOW, 60, pump_hz=1.8, coolant_c=liquid)
+            self.run_for(MIDDLE, 60, pump_hz=3.0, coolant_c=liquid)
+        self.run_for(HIGH, 60, pump_hz=4.4, coolant_c=20.0)
+        self.assertEqual(sorted(a.model.low_exit_gaps), [6.0, 7.0, 8.0])
+        self.assertEqual(a._step_up_gap(), 7.0)
+        self.assertEqual(a.status_values()["adaptive_step_up_gap"], "7.0")
 
     def test_learning_does_not_smooth_from_rise(self):
         a = self.adaptive
