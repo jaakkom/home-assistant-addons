@@ -394,6 +394,7 @@ def step(
             room_target=settings.room_target,
             hysteresis_c=settings.room_drop,
             confirmed_coolant=controller.confirmed_standby(),
+            room_stopped=controller.room_satisfied,
         )
         if _apply_adaptive_actions(actions, controller, settings, adaptive, now):
             settings_changed = True

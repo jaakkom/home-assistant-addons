@@ -148,6 +148,11 @@ class Controller:
     def phase(self) -> str:
         return self._phase
 
+    @property
+    def room_satisfied(self) -> bool:
+        """The add-on thermostat stopped the heater, or keeps it waiting, because the room is warm."""
+        return self._room_satisfied
+
     def set_mode(self, mode: str) -> None:
         if mode in MODES and mode != self.mode:
             self.mode = mode
